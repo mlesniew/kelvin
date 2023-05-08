@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 
+#include <WiFi.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
 
@@ -89,6 +90,26 @@ void scan_complete(BLEScanResults results) {
 
 void setup() {
     Serial.begin(115200);
+
+    WiFi.hostname("celsius2");
+    WiFi.setAutoReconnect(true);
+
+    if (false) {
+        // use smart config
+        Serial.println("Beginning smart config...");
+        WiFi.beginSmartConfig();
+
+        while (!WiFi.smartConfigDone()) {
+            delay(500);
+            Serial.print(".");
+        }
+        Serial.println("Smart config complete");
+    } else {
+        // use stored credentials
+        WiFi.softAPdisconnect(true);
+        WiFi.begin();
+    }
+
     BLEDevice::init("");
     auto * scan = BLEDevice::getScan();
     scan->setActiveScan(true);
