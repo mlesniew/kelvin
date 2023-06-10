@@ -13,6 +13,8 @@
 #include <ArduinoJson.h>
 #include <PicoMQTT.h>
 
+String hostname = "kelvin";
+
 WebServer server;
 PicoMQTT::Client mqtt("calor.local");
 
@@ -111,7 +113,7 @@ void scan_complete(BLEScanResults results) {
 void setup() {
     Serial.begin(115200);
 
-    WiFi.hostname("celsius2");
+    WiFi.hostname(hostname);
     WiFi.setAutoReconnect(true);
 
     if (false) {
@@ -130,7 +132,7 @@ void setup() {
         WiFi.begin();
     }
 
-    if (!MDNS.begin("celsius2")) {
+    if (!MDNS.begin(hostname.c_str())) {
         Serial.println(F("MDNS init failed"));
     }
 
@@ -260,8 +262,7 @@ void publish_readings() {
                       reading.humidity,
                       reading.battery);
 
-        String topic = "calor/";
-        topic += name.c_str();
+        const String topic = "calor/" + hostname + "/" + name.c_str();
         mqtt.publish(topic + "/temperature", String(reading.temperature));
         mqtt.publish(topic + "/humidity", String(reading.humidity));
         mqtt.publish(topic + "/battery_level", String(reading.battery));
