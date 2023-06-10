@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
+#include <ESPmDNS.h>
 
 bool scanning = false;
 std::mutex mutex;
@@ -108,6 +109,10 @@ void setup() {
         // use stored credentials
         WiFi.softAPdisconnect(true);
         WiFi.begin();
+    }
+
+    if (MDNS.begin("celsius2")) {
+        Serial.println(F("MDNS init failed"));
     }
 
     BLEDevice::init("");
