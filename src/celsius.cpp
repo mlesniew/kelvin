@@ -11,9 +11,10 @@
 #include <uri/UriRegex.h>
 
 #include <ArduinoJson.h>
+#include <PicoMQTT.h>
 
 WebServer server;
-
+PicoMQTT::Client mqtt("calor.local");
 
 bool scanning = false;
 std::mutex mutex;
@@ -27,7 +28,6 @@ struct Reading {
 
 std::map<BLEAddress, std::string> discovered;
 std::map<BLEAddress, std::string> subscribed;
-
 std::map<BLEAddress, Reading> readings;
 
 void report_device(BLEAdvertisedDevice & device) {
@@ -228,34 +228,55 @@ void setup() {
     });
 
     server.begin();
+    mqtt.begin();
+}
+
+void publish_readings() {
+    static unsigned long last_update = 0;
+
+    std::lock_guard<std::mutex> guard(mutex);
+
+    for (const auto & kv : readings) {
+        auto address = kv.first;
+        const auto & reading = kv.second;
+
+        const auto it = subscribed.find(address);
+        if (it == subscribed.end()) {
+            // not subscribed (anymore...)
+            continue;
+        }
+
+        if (reading.timestamp < last_update) {
+            // already published
+            continue;
+        }
+
+        const auto name = it->second;
+
+        Serial.printf("%s  %-16s  %6.2f  %6.2f  %3u\n",
+                      address.toString().c_str(),
+                      name.c_str(),
+                      reading.temperature,
+                      reading.humidity,
+                      reading.battery);
+
+        String topic = "calor/";
+        topic += name.c_str();
+        mqtt.publish(topic + "/temperature", String(reading.temperature));
+        mqtt.publish(topic + "/humidity", String(reading.humidity));
+        mqtt.publish(topic + "/battery_level", String(reading.battery));
+    }
+
+    last_update = millis();
 }
 
 void loop() {
     server.handleClient();
+    mqtt.loop();
 
     if (!scanning) {
         scanning = BLEDevice::getScan()->start(10, scan_complete, false);
     }
 
-    delay(1000);
-    {
-        std::lock_guard<std::mutex> guard(mutex);
-        for (const auto & kv : readings) {
-            auto address = kv.first;
-            const auto & reading = kv.second;
-
-            const auto it = subscribed.find(address);
-            if (it == subscribed.end())
-                continue;
-
-            const auto name = it->second;
-
-            Serial.printf("%s  %-16s  %6.2f  %6.2f  %3u\n",
-                          address.toString().c_str(),
-                          name.c_str(),
-                          reading.temperature,
-                          reading.humidity,
-                          reading.battery);
-        }
-    }
+    publish_readings();
 }
