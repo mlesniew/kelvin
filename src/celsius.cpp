@@ -7,11 +7,19 @@
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <ESPmDNS.h>
+#include <WebServer.h>
+#include <uri/UriRegex.h>
+
+#include <ArduinoJson.h>
+
+WebServer server;
+
 
 bool scanning = false;
 std::mutex mutex;
 
 struct Reading {
+    unsigned long timestamp;
     float temperature;
     float humidity;
     unsigned int battery;
@@ -87,6 +95,7 @@ void report_device(BLEAdvertisedDevice & device) {
         reading.temperature = 0.01 * (float) data.temperature;
         reading.humidity = 0.01 * (float) data.humidity;
         reading.battery = data.battery_level;
+        reading.timestamp = millis();
     }
 }
 
@@ -131,19 +140,104 @@ void setup() {
     scan->setInterval(100);
     scan->setWindow(99);
 
-
-    //
     subscribed[BLEAddress("a4:c1:38:16:ee:b7")] = "Foo";
     subscribed[BLEAddress("a4:c1:38:2e:e5:cf")] = "Bar";
     subscribed[BLEAddress("a4:c1:38:6a:85:d7")] = "Baz";
+
+    server.on("/readings", HTTP_GET, []{
+        std::lock_guard<std::mutex> guard(mutex);
+
+        StaticJsonDocument<1024> json;
+
+        for (const auto & kv : readings) {
+            auto address = kv.first;
+            const auto & reading = kv.second;
+
+            const auto it = subscribed.find(address);
+            if (it == subscribed.end())
+                continue;
+
+            const auto name = it->second;
+
+            auto json_element = json[name];
+            json_element["temperature"] = reading.temperature;
+            json_element["humidity"] = reading.humidity;
+            json_element["battery"] = reading.battery;
+            json_element["age"] = (millis() - reading.timestamp) / 1000;
+        }
+
+        String output;
+        serializeJson(json, output);
+        server.send(200, F("application/json"), output);
+    });
+
+    server.on("/discovered", HTTP_GET, []{
+        std::lock_guard<std::mutex> guard(mutex);
+        StaticJsonDocument<1024> json;
+        for (const auto & kv : discovered) {
+            auto address = kv.first;
+            const auto & name = kv.second;
+            json[address.toString()] = name;
+        }
+        String output;
+        serializeJson(json, output);
+        server.send(200, F("application/json"), output);
+    });
+
+    server.on("/subscriptions", [] {
+        std::lock_guard<std::mutex> guard(mutex);
+        StaticJsonDocument<1024> json;
+        for (const auto & kv : subscribed) {
+            auto address = kv.first;
+            const auto & name = kv.second;
+            json[address.toString()] = name;
+        }
+        String output;
+        serializeJson(json, output);
+        server.send(200, F("application/json"), output);
+    });
+
+    server.on(UriRegex("/subscriptions/((?:[a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2})"), [] {
+        std::lock_guard<std::mutex> guard(mutex);
+
+        const std::string addrstr = server.pathArg(0).c_str();
+        BLEAddress address{addrstr};
+
+        switch (server.method()) {
+            case HTTP_POST:
+            case HTTP_PUT:
+            case HTTP_PATCH:
+                subscribed[address] = server.arg("plain").c_str();
+            case HTTP_GET:
+                {
+                    auto it = subscribed.find(address);
+                    if (it == subscribed.end())
+                        server.send(404);
+                    else
+                        server.send(200, F("text/plain"), it->second.c_str());
+                }
+                return;
+            case HTTP_DELETE:
+                subscribed.erase(address);
+                server.send(200);
+                return;
+            default:
+                server.send(405);
+                return;
+        }
+    });
+
+    server.begin();
 }
 
 void loop() {
+    server.handleClient();
+
     if (!scanning) {
         scanning = BLEDevice::getScan()->start(10, scan_complete, false);
     }
-    delay(100);
 
+    delay(1000);
     {
         std::lock_guard<std::mutex> guard(mutex);
         for (const auto & kv : readings) {
@@ -163,6 +257,5 @@ void loop() {
                           reading.humidity,
                           reading.battery);
         }
-        readings.clear();
     }
 }
