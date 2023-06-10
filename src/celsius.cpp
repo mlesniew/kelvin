@@ -11,14 +11,16 @@
 bool scanning = false;
 std::mutex mutex;
 
-struct Readings {
-    std::string name;
+struct Reading {
     float temperature;
     float humidity;
     unsigned int battery;
 };
 
-std::map<BLEAddress, Readings> readings;
+std::map<BLEAddress, std::string> discovered;
+std::map<BLEAddress, std::string> subscribed;
+
+std::map<BLEAddress, Reading> readings;
 
 void report_device(BLEAdvertisedDevice & device) {
 
@@ -30,13 +32,33 @@ void report_device(BLEAdvertisedDevice & device) {
         return;
     }
 
+    {
+        // add device to discovered device list
+        std::string & stored_name = discovered[address];
+
+        // store name if it was captured
+        const auto name = device.getName();
+        if (name.size()) {
+            stored_name = name;
+        }
+    }
+
+    {
+        // see if we're subscribed to the address
+        auto it = subscribed.find(address);
+        if (it == subscribed.end()) {
+            return;
+        }
+    }
+
+    Reading & reading = readings[address];
+
     for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
         if (!device.getServiceDataUUID(i).equals(THERMOMETHER_UUID)) {
             continue;
         }
 
         const auto raw_data = device.getServiceData();
-        const auto name = device.getName();
 
         struct {
             // uint8_t     size;   // = 18
@@ -62,21 +84,9 @@ void report_device(BLEAdvertisedDevice & device) {
 
         memcpy(&data, raw_data.c_str(), sizeof(data));
 
-        Serial.printf("%s  %-16s  %6.2f  %6.2f  %3u\n",
-                      address.toString().c_str(),
-                      name.c_str(),
-                      0.01 * (float)data.temperature,
-                      0.01 * (float)data.humidity,
-                      data.battery_level);
-
-        Readings & r = readings[address];
-        r.temperature = 0.01 * (float) data.temperature;
-        r.humidity = 0.01 * (float) data.humidity;
-        r.battery = data.battery_level;
-
-        if (name.size()) {
-            r.name = name;
-        }
+        reading.temperature = 0.01 * (float) data.temperature;
+        reading.humidity = 0.01 * (float) data.humidity;
+        reading.battery = data.battery_level;
     }
 }
 
@@ -120,10 +130,39 @@ void setup() {
     scan->setActiveScan(true);
     scan->setInterval(100);
     scan->setWindow(99);
+
+
+    //
+    subscribed[BLEAddress("a4:c1:38:16:ee:b7")] = "Foo";
+    subscribed[BLEAddress("a4:c1:38:2e:e5:cf")] = "Bar";
+    subscribed[BLEAddress("a4:c1:38:6a:85:d7")] = "Baz";
 }
 
 void loop() {
     if (!scanning) {
         scanning = BLEDevice::getScan()->start(10, scan_complete, false);
+    }
+    delay(100);
+
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        for (const auto & kv : readings) {
+            auto address = kv.first;
+            const auto & reading = kv.second;
+
+            const auto it = subscribed.find(address);
+            if (it == subscribed.end())
+                continue;
+
+            const auto name = it->second;
+
+            Serial.printf("%s  %-16s  %6.2f  %6.2f  %3u\n",
+                          address.toString().c_str(),
+                          name.c_str(),
+                          reading.temperature,
+                          reading.humidity,
+                          reading.battery);
+        }
+        readings.clear();
     }
 }
