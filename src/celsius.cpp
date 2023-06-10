@@ -18,7 +18,6 @@ String hostname = "kelvin";
 WebServer server;
 PicoMQTT::Client mqtt("calor.local");
 
-bool scanning = false;
 std::mutex mutex;
 
 struct Reading {
@@ -101,14 +100,12 @@ void report_device(BLEAdvertisedDevice & device) {
     }
 }
 
-void scan_complete(BLEScanResults results) {
-    std::lock_guard<std::mutex> guard(mutex);
-    for (int i = 0; i < results.getCount(); ++i) {
-        auto device = results.getDevice(i);
-        report_device(device);
+class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
+    void onResult(BLEAdvertisedDevice advertisedDevice) override {
+        std::lock_guard<std::mutex> guard(mutex);
+        report_device(advertisedDevice);
     }
-    scanning = false;
-}
+} scan_callbacks;
 
 void setup() {
     Serial.begin(115200);
@@ -136,11 +133,21 @@ void setup() {
         Serial.println(F("MDNS init failed"));
     }
 
-    BLEDevice::init("");
-    auto * scan = BLEDevice::getScan();
-    scan->setActiveScan(true);
-    scan->setInterval(100);
-    scan->setWindow(99);
+    {
+        BLEDevice::init("");
+        auto & scan = *BLEDevice::getScan();
+        scan.setActiveScan(true);
+        scan.setInterval(100);
+        scan.setWindow(99);
+
+        scan.setAdvertisedDeviceCallbacks(
+                &scan_callbacks,
+                true /* allow duplicates */,
+                true /* parse */);
+
+        // scan forever
+        scan.start(0, nullptr, false);
+    }
 
     subscribed[BLEAddress("a4:c1:38:16:ee:b7")] = "Foo";
     subscribed[BLEAddress("a4:c1:38:2e:e5:cf")] = "Bar";
@@ -274,10 +281,5 @@ void publish_readings() {
 void loop() {
     server.handleClient();
     mqtt.loop();
-
-    if (!scanning) {
-        scanning = BLEDevice::getScan()->start(10, scan_complete, false);
-    }
-
     publish_readings();
 }
