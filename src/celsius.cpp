@@ -121,7 +121,7 @@ void setup() {
         WiFi.begin();
     }
 
-    if (MDNS.begin("celsius2")) {
+    if (!MDNS.begin("celsius2")) {
         Serial.println(F("MDNS init failed"));
     }
 
