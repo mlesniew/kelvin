@@ -7,18 +7,18 @@
 #include <BLEScan.h>
 #include <ESPmDNS.h>
 #include <SPIFFS.h>
-#include <WebServer.h>
 #include <WiFi.h>
 #include <uri/UriRegex.h>
 
 #include <ArduinoJson.h>
+#include <EspRestServer.h>
 #include <PicoMQTT.h>
 
 const char CONFIG_FILE[] PROGMEM = "/config.json";
 
 String hostname = "kelvin";
 
-WebServer server;
+EspRestServer server;
 PicoMQTT::Client mqtt("calor.local");
 
 std::mutex mutex;
@@ -235,9 +235,7 @@ void setup() {
             json_element["age"] = (millis() - reading.timestamp) / 1000;
         }
 
-        String output;
-        serializeJson(json, output);
-        server.send(200, F("application/json"), output);
+        server.sendJson(json);
     });
 
     server.on("/discovered", HTTP_GET, []{
@@ -248,9 +246,7 @@ void setup() {
             const auto & name = kv.second;
             json[address.toString()] = name;
         }
-        String output;
-        serializeJson(json, output);
-        server.send(200, F("application/json"), output);
+        server.sendJson(json);
     });
 
     server.on("/subscriptions", [] {
@@ -261,16 +257,12 @@ void setup() {
             const auto & name = kv.second;
             json[address.toString()] = name;
         }
-        String output;
-        serializeJson(json, output);
-        server.send(200, F("application/json"), output);
+        server.sendJson(json);
     });
 
     server.on("/config", HTTP_GET, []{
         std::lock_guard<std::mutex> guard(mutex);
-        String output;
-        serializeJson(get_config(), output);
-        server.send(200, F("application/json"), output);
+        server.sendJson(get_config());
     });
 
     server.on("/config/save", HTTP_POST, []{
