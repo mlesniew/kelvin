@@ -110,12 +110,34 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
     }
 } scan_callbacks;
 
-void load_defaults() {
-    subscribed.clear();
-    hostname = "kelvin";
+DynamicJsonDocument get_config() {
+    DynamicJsonDocument json(1024);
+
+    json["hostname"] = hostname;
+
+    json["subscriptions"].to<JsonObject>();
+
+    for (const auto & kv : subscribed) {
+        auto address = kv.first;
+        json["subscriptions"][address.toString()] = kv.second;
+    }
+
+    return json;
 }
 
-void load_configuration() {
+void set_config(const JsonDocument & config) {
+    hostname = config["hostname"] | hostname;
+
+    subscribed.clear();
+
+    const auto subscription_config = config["subscriptions"].as<JsonObjectConst>();
+    for (JsonPairConst kv : subscription_config) {
+        const auto address = BLEAddress(kv.key().c_str());
+        subscribed[address] = kv.value().as<const char *>();
+    }
+}
+
+void load_config() {
     auto file = SPIFFS.open("/config.json", FILE_READ);
     if (!file) {
         return;
@@ -126,16 +148,23 @@ void load_configuration() {
     Serial.printf("Parsing result of %s: %s\n", file.path(), error.c_str());
 
     if (error == DeserializationError::Ok) {
-        hostname = config["hostname"] | hostname;
-
-        const auto subscription_config = config["subscriptions"].as<JsonObjectConst>();
-        for (JsonPairConst kv : subscription_config) {
-            const auto address = BLEAddress(kv.key().c_str());
-            subscribed[address] = kv.value().as<const char *>();
-        }
+        set_config(config);
     }
 
     file.close();
+}
+
+bool save_config() {
+    auto file = SPIFFS.open("/config.json", FILE_WRITE);
+    if (!file) {
+        return false;
+    }
+
+    const auto written = serializeJson(get_config(), file);
+    Serial.printf("Bytes written to %s: %u\n", file.path(), written);
+
+    file.close();
+    return written > 0;
 }
 
 void setup() {
@@ -143,8 +172,7 @@ void setup() {
 
     SPIFFS.begin();
 
-    load_defaults();
-    load_configuration();
+    load_config();
 
     WiFi.hostname(hostname);
     WiFi.setAutoReconnect(true);
@@ -236,6 +264,18 @@ void setup() {
         String output;
         serializeJson(json, output);
         server.send(200, F("application/json"), output);
+    });
+
+    server.on("/config", HTTP_GET, []{
+        std::lock_guard<std::mutex> guard(mutex);
+        String output;
+        serializeJson(get_config(), output);
+        server.send(200, F("application/json"), output);
+    });
+
+    server.on("/config/save", HTTP_POST, []{
+        std::lock_guard<std::mutex> guard(mutex);
+        server.send(save_config() ? 200 : 500);
     });
 
     server.on(UriRegex("/subscriptions/((?:[a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2})"), [] {
