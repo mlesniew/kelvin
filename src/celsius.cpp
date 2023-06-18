@@ -3,15 +3,18 @@
 
 #include <Arduino.h>
 
-#include <WiFi.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <ESPmDNS.h>
+#include <SPIFFS.h>
 #include <WebServer.h>
+#include <WiFi.h>
 #include <uri/UriRegex.h>
 
 #include <ArduinoJson.h>
 #include <PicoMQTT.h>
+
+const char CONFIG_FILE[] PROGMEM = "/config.json";
 
 String hostname = "kelvin";
 
@@ -107,8 +110,41 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
     }
 } scan_callbacks;
 
+void load_defaults() {
+    subscribed.clear();
+    hostname = "kelvin";
+}
+
+void load_configuration() {
+    auto file = SPIFFS.open("/config.json", FILE_READ);
+    if (!file) {
+        return;
+    }
+
+    StaticJsonDocument<1024> config;
+    const auto error = deserializeJson(config, file);
+    Serial.printf("Parsing result of %s: %s\n", file.path(), error.c_str());
+
+    if (error == DeserializationError::Ok) {
+        hostname = config["hostname"] | hostname;
+
+        const auto subscription_config = config["subscriptions"].as<JsonObjectConst>();
+        for (JsonPairConst kv : subscription_config) {
+            const auto address = BLEAddress(kv.key().c_str());
+            subscribed[address] = kv.value().as<const char *>();
+        }
+    }
+
+    file.close();
+}
+
 void setup() {
     Serial.begin(115200);
+
+    SPIFFS.begin();
+
+    load_defaults();
+    load_configuration();
 
     WiFi.hostname(hostname);
     WiFi.setAutoReconnect(true);
@@ -148,10 +184,6 @@ void setup() {
         // scan forever
         scan.start(0, nullptr, false);
     }
-
-    subscribed[BLEAddress("a4:c1:38:16:ee:b7")] = "Foo";
-    subscribed[BLEAddress("a4:c1:38:2e:e5:cf")] = "Bar";
-    subscribed[BLEAddress("a4:c1:38:6a:85:d7")] = "Baz";
 
     server.on("/readings", HTTP_GET, []{
         std::lock_guard<std::mutex> guard(mutex);
