@@ -13,6 +13,11 @@
 #include <ArduinoJson.h>
 #include <EspRestServer.h>
 #include <PicoMQTT.h>
+#include <PicoUtils.h>
+
+PicoUtils::PinInput<0, true> button;
+PicoUtils::PinOutput<2, false> wifi_led;
+PicoUtils::Blink wifi_blink(wifi_led, 0, 91);
 
 const char CONFIG_FILE[] PROGMEM = "/config.json";
 
@@ -168,16 +173,34 @@ bool save_config() {
 }
 
 void setup() {
+    wifi_blink.init();
+    wifi_led.set(1);
+    button.init();
+
     Serial.begin(115200);
 
     SPIFFS.begin();
-
     load_config();
+
+    Serial.println(F("\n\n"
+                     "88  dP 888888 88     Yb    dP 88 88b 88\n"
+                     "88odP  88__   88      Yb  dP  88 88Yb88\n"
+                     "88\"Yb  88""   88  .o   YbdP   88 88 Y88\n"
+                     "88  Yb 888888 88ood8    YP    88 88  Y8\n"
+                     "\n"
+                     "Kelvin " __DATE__ " " __TIME__ "\n"
+                     "\n\n"
+                     "Press and hold button now to enter WiFi setup.\n"
+                    ));
 
     WiFi.hostname(hostname);
     WiFi.setAutoReconnect(true);
 
-    if (false) {
+    delay(3000);
+    if (button) {
+        wifi_blink.set_pattern(0b1100);
+        PicoUtils::BackgroundBlinker bb(wifi_blink);
+
         // use smart config
         Serial.println("Beginning smart config...");
         WiFi.beginSmartConfig();
@@ -302,6 +325,7 @@ void setup() {
 
     server.begin();
     mqtt.begin();
+    wifi_blink.set_pattern(0b10);
 }
 
 void publish_readings() {
@@ -342,8 +366,27 @@ void publish_readings() {
     last_update = millis();
 }
 
+void led_proc() {
+    switch (WiFi.status()) {
+        case WL_CONNECTED:
+            if (mqtt.connected())
+                wifi_blink.set_pattern(uint64_t(0b101) << 60);
+            else
+                wifi_blink.set_pattern(uint64_t(1) << 60);
+            break;
+        case WL_DISCONNECTED:
+            wifi_blink.set_pattern(0);
+            break;
+        default:
+            wifi_blink.set_pattern(0b100);
+            break;
+    }
+    wifi_blink.tick();
+}
+
 void loop() {
     server.handleClient();
     mqtt.loop();
     publish_readings();
+    led_proc();
 }
