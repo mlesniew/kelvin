@@ -109,10 +109,10 @@ void report_device(BLEAdvertisedDevice & device) {
 }
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
-    void onResult(BLEAdvertisedDevice advertisedDevice) override {
-        std::lock_guard<std::mutex> guard(mutex);
-        report_device(advertisedDevice);
-    }
+        void onResult(BLEAdvertisedDevice advertisedDevice) override {
+            std::lock_guard<std::mutex> guard(mutex);
+            report_device(advertisedDevice);
+        }
 } scan_callbacks;
 
 DynamicJsonDocument get_config() {
@@ -228,15 +228,15 @@ void setup() {
         scan.setWindow(99);
 
         scan.setAdvertisedDeviceCallbacks(
-                &scan_callbacks,
-                true /* allow duplicates */,
-                true /* parse */);
+            &scan_callbacks,
+            true /* allow duplicates */,
+            true /* parse */);
 
         // scan forever
         scan.start(0, nullptr, false);
     }
 
-    server.on("/readings", HTTP_GET, []{
+    server.on("/readings", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
 
         StaticJsonDocument<1024> json;
@@ -246,8 +246,9 @@ void setup() {
             const auto & reading = kv.second;
 
             const auto it = subscribed.find(address);
-            if (it == subscribed.end())
+            if (it == subscribed.end()) {
                 continue;
+            }
 
             const auto name = it->second;
 
@@ -261,7 +262,7 @@ void setup() {
         server.sendJson(json);
     });
 
-    server.on("/discovered", HTTP_GET, []{
+    server.on("/discovered", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
         StaticJsonDocument<1024> json;
         for (const auto & kv : discovered) {
@@ -283,12 +284,12 @@ void setup() {
         server.sendJson(json);
     });
 
-    server.on("/config", HTTP_GET, []{
+    server.on("/config", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
         server.sendJson(get_config());
     });
 
-    server.on("/config/save", HTTP_POST, []{
+    server.on("/config/save", HTTP_POST, [] {
         std::lock_guard<std::mutex> guard(mutex);
         server.send(save_config() ? 200 : 500);
     });
@@ -304,15 +305,15 @@ void setup() {
             case HTTP_PUT:
             case HTTP_PATCH:
                 subscribed[address] = server.arg("plain").c_str();
-            case HTTP_GET:
-                {
-                    auto it = subscribed.find(address);
-                    if (it == subscribed.end())
-                        server.send(404);
-                    else
-                        server.send(200, F("text/plain"), it->second.c_str());
+            case HTTP_GET: {
+                auto it = subscribed.find(address);
+                if (it == subscribed.end()) {
+                    server.send(404);
+                } else {
+                    server.send(200, F("text/plain"), it->second.c_str());
                 }
-                return;
+            }
+            return;
             case HTTP_DELETE:
                 subscribed.erase(address);
                 server.send(200);
@@ -369,10 +370,11 @@ void publish_readings() {
 void led_proc() {
     switch (WiFi.status()) {
         case WL_CONNECTED:
-            if (mqtt.connected())
+            if (mqtt.connected()) {
                 wifi_blink.set_pattern(uint64_t(0b101) << 60);
-            else
+            } else {
                 wifi_blink.set_pattern(uint64_t(1) << 60);
+            }
             break;
         case WL_DISCONNECTED:
             wifi_blink.set_pattern(0);
