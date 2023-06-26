@@ -16,15 +16,13 @@
 
 PicoUtils::PinInput<0, true> button;
 PicoUtils::PinOutput<2, false> wifi_led;
+PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
-const char CONFIG_FILE[] PROGMEM = "/config.json";
-
-String hostname = "kelvin";
-
-PicoUtils::WiFiControl<WiFiManager> wifi_control(wifi_led);
+String hostname;
+String hass_autodiscovery_topic;
 
 PicoUtils::RestfulServer<WebServer> server;
-PicoMQTT::Client mqtt("calor.local");
+PicoMQTT::Client mqtt;
 
 std::mutex mutex;
 
@@ -115,10 +113,12 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
         }
 } scan_callbacks;
 
-DynamicJsonDocument get_config() {
-    DynamicJsonDocument json(1024);
+namespace config {
 
-    json["hostname"] = hostname;
+const char CONFIG_PATH[] PROGMEM = "/config.json";
+
+DynamicJsonDocument get() {
+    DynamicJsonDocument json(1024);
 
     json["subscriptions"].to<JsonObject>();
 
@@ -130,11 +130,8 @@ DynamicJsonDocument get_config() {
     return json;
 }
 
-void set_config(const JsonDocument & config) {
-    hostname = config["hostname"] | hostname;
-
+void set(const JsonDocument & config) {
     subscribed.clear();
-
     const auto subscription_config = config["subscriptions"].as<JsonObjectConst>();
     for (JsonPairConst kv : subscription_config) {
         const auto address = BLEAddress(kv.key().c_str());
@@ -142,33 +139,85 @@ void set_config(const JsonDocument & config) {
     }
 }
 
-void load_config() {
-    PicoUtils::JsonConfigFile<StaticJsonDocument<1024>> config(SPIFFS, FPSTR(CONFIG_FILE));
-    set_config(config);
+void load() {
+    PicoUtils::JsonConfigFile<StaticJsonDocument<1024>> config(SPIFFS, FPSTR(CONFIG_PATH));
+    set(config);
 }
 
-bool save_config() {
-    auto file = SPIFFS.open("/config.json", FILE_WRITE);
+bool save() {
+    auto file = SPIFFS.open(FPSTR(CONFIG_PATH), FILE_WRITE);
     if (!file) {
         return false;
     }
 
-    const auto written = serializeJson(get_config(), file);
+    const auto written = serializeJson(config::get(), file);
     Serial.printf("Bytes written to %s: %u\n", file.path(), written);
 
     file.close();
     return written > 0;
 }
 
+}
+
+namespace network_config {
+
+const char CONFIG_PATH[] PROGMEM = "/network.json";
+
+void load() {
+    PicoUtils::JsonConfigFile<StaticJsonDocument<256>> config(SPIFFS, FPSTR(CONFIG_PATH));
+    hostname = config["hostname"] | "kelvin";
+    hass_autodiscovery_topic = config["hass_autodiscovery_topic"] | "homeassistant";
+    mqtt.host = config["mqtt"]["server"] | "calor.local";
+}
+
+void save() {
+    auto file = SPIFFS.open(FPSTR(CONFIG_PATH), "w");
+    if (file) {
+        StaticJsonDocument<256> config;
+        config["hostname"] = hostname;
+        config["hass_autodiscovery_topic"] = hass_autodiscovery_topic;
+        config["mqtt"]["host"] = mqtt.host;
+        serializeJson(config, file);
+        file.close();
+    }
+}
+
+}
+
+void config_mode() {
+    led_blinker.set_pattern(0b100100100 << 9);
+
+    WiFiManagerParameter param_hostname("hostname", "Hostname", hostname.c_str(), 64);
+    WiFiManagerParameter param_mqtt_server("mqtt_server", "MQTT Server", mqtt.host.c_str(), 64);
+    WiFiManagerParameter param_hass_topic("hass_autodiscovery_topic", "Home Assistant autodiscovery topic",
+                                          hass_autodiscovery_topic.c_str(), 64);
+
+    WiFiManager wifi_manager;
+    wifi_manager.addParameter(&param_hostname);
+    wifi_manager.addParameter(&param_mqtt_server);
+    wifi_manager.addParameter(&param_hass_topic);
+
+    wifi_manager.startConfigPortal("Kelvin");
+
+    hostname = param_hostname.getValue();
+    mqtt.host = param_mqtt_server.getValue();
+    hass_autodiscovery_topic = param_hass_topic.getValue();
+
+    network_config::save();
+}
+
 void setup() {
     wifi_led.init();
-    wifi_led.set(1);
+    led_blinker.set_pattern(0b10);
+    PicoUtils::BackgroundBlinker bb(led_blinker);
+
     button.init();
 
     Serial.begin(115200);
 
     SPIFFS.begin();
-    load_config();
+    network_config::load();
+    config::load();
 
     Serial.println(F("\n\n"
                      "88  dP 888888 88     Yb    dP 88 88b 88\n"
@@ -182,7 +231,15 @@ void setup() {
                     ));
 
     delay(3000);
-    wifi_control.init(bool(button), "kelvin");
+
+    if (button) {
+        config_mode();
+    }
+
+    WiFi.hostname(hostname);
+    WiFi.setAutoReconnect(true);
+    WiFi.softAPdisconnect(true);
+    WiFi.begin();
 
     if (!MDNS.begin(hostname.c_str())) {
         Serial.println(F("MDNS init failed"));
@@ -254,12 +311,12 @@ void setup() {
 
     server.on("/config", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
-        server.sendJson(get_config());
+        server.sendJson(config::get());
     });
 
     server.on("/config/save", HTTP_POST, [] {
         std::lock_guard<std::mutex> guard(mutex);
-        server.send(save_config() ? 200 : 500);
+        server.send(config::save() ? 200 : 500);
     });
 
     server.on(UriRegex("/subscriptions/((?:[a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2})"), [] {
@@ -294,6 +351,7 @@ void setup() {
 
     server.begin();
     mqtt.begin();
+    led_blinker.set_pattern(1);
 }
 
 void publish_readings() {
@@ -335,11 +393,14 @@ void publish_readings() {
 }
 
 PicoUtils::PeriodicRun hass_autodiscovery(300, 30, [] {
+    if (hass_autodiscovery_topic.length() == 0) {
+        return;
+    }
+
     std::lock_guard<std::mutex> guard(mutex);
 
     Serial.println("Home assistant autodiscovery announcement...");
 
-    const String HASS_AUTODISCOVERY_TOPIC = "homeassistant";
     const String mac(ESP.getEfuseMac(), HEX);
 
     struct Entity {
@@ -371,7 +432,7 @@ PicoUtils::PeriodicRun hass_autodiscovery(300, 30, [] {
             const auto & name = kv.second;
 
             // TODO: should we drop hostname (node_id)?
-            const String topic = HASS_AUTODISCOVERY_TOPIC + "/sensor/" + hostname + "/" + unique_id + "/config";
+            const String topic = hass_autodiscovery_topic + "/sensor/" + hostname + "/" + unique_id + "/config";
 
             StaticJsonDocument<1024> json;
             json[F("unique_id")] = unique_id;
@@ -398,8 +459,21 @@ PicoUtils::PeriodicRun hass_autodiscovery(300, 30, [] {
     }
 });
 
+void update_status_led() {
+    if (WiFi.status() == WL_CONNECTED) {
+        if (mqtt.connected()) {
+            led_blinker.set_pattern(uint64_t(0b101) << 60);
+        } else {
+            led_blinker.set_pattern(uint64_t(0b1) << 60);
+        }
+    } else {
+        led_blinker.set_pattern(0b1100);
+    }
+    led_blinker.tick();
+};
+
 void loop() {
-    wifi_control.tick();
+    update_status_led();
     server.handleClient();
     mqtt.loop();
     publish_readings();
