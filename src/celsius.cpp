@@ -328,15 +328,80 @@ void publish_readings() {
         const String topic = "calor/" + hostname + "/" + name.c_str();
         mqtt.publish(topic + "/temperature", String(reading.temperature));
         mqtt.publish(topic + "/humidity", String(reading.humidity));
-        mqtt.publish(topic + "/battery_level", String(reading.battery));
+        mqtt.publish(topic + "/battery", String(reading.battery));
     }
 
     last_update = millis();
 }
+
+PicoUtils::PeriodicRun hass_autodiscovery(300, 30, [] {
+    std::lock_guard<std::mutex> guard(mutex);
+
+    Serial.println("Home assistant autodiscovery announcement...");
+
+    const String HASS_AUTODISCOVERY_TOPIC = "homeassistant";
+    const String mac(ESP.getEfuseMac(), HEX);
+
+    struct Entity {
+        String name;
+        String icon;
+        String device_class;
+        String unit_of_measurement;
+    };
+
+    static const Entity entities[] = {
+        {F("temperature"), F("mdi:thermometer"), F("temperature"), F("°C")},
+        {F("humidity"), F("mdi:cloud-percent"), F("humidity"), F("%")},
+        {F("battery"), F("mdi:battery"), F("battery"), F("%")},
+    };
+
+    for (const auto & kv : subscribed) {
+        auto address = kv.first;
+        auto discovered_it = discovered.find(address);
+        if (discovered_it == discovered.end()) {
+            continue;
+        }
+        auto device_name = discovered_it->second;
+
+        auto device_id = String(address.toString().c_str());
+        device_id.replace(":", "");
+
+        for (const auto & entity : entities) {
+            const auto unique_id = device_id + "-" + entity.name;
+            const auto & name = kv.second;
+
+            // TODO: should we drop hostname (node_id)?
+            const String topic = HASS_AUTODISCOVERY_TOPIC + "/sensor/" + hostname + "/" + unique_id + "/config";
+
+            StaticJsonDocument<1024> json;
+            json[F("unique_id")] = unique_id;
+            json[F("expire_after")] = 120;
+            json[F("state_class")] = "measurement";
+
+            json[F("state_topic")] = "calor/" + hostname + "/" + name.c_str() + "/" + entity.name;
+            json[F("name")] = entity.name;
+            json[F("icon")] = entity.icon;
+            json[F("device_class")] = entity.device_class;
+            json[F("unit_of_measurement")] = entity.unit_of_measurement;
+
+            auto device = json[F("device")];
+            device["name"] = device_name;
+            device["suggested_area"] = name;
+            device["identifiers"][0] = device_id;
+            device["model"] = "Wireless temperature and humidity sensor";
+            device["via_device"] = mac;
+
+            auto publish = mqtt.begin_publish(topic, measureJson(json));
+            serializeJson(json, publish);
+            publish.send();
+        }
+    }
+});
 
 void loop() {
     wifi_control.tick();
     server.handleClient();
     mqtt.loop();
     publish_readings();
+    hass_autodiscovery.tick();
 }
