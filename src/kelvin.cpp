@@ -168,6 +168,9 @@ void load() {
     hostname = config["hostname"] | "kelvin";
     hass_autodiscovery_topic = config["hass_autodiscovery_topic"] | "homeassistant";
     mqtt.host = config["mqtt"]["server"] | "calor.local";
+    mqtt.port = config["mqtt"]["port"] | 1883;
+    mqtt.username = config["mqtt"]["username"] | "kelvin";
+    mqtt.password = config["mqtt"]["password"] | "harara";
 }
 
 void save() {
@@ -177,6 +180,9 @@ void save() {
         config["hostname"] = hostname;
         config["hass_autodiscovery_topic"] = hass_autodiscovery_topic;
         config["mqtt"]["host"] = mqtt.host;
+        config["mqtt"]["port"] = mqtt.port;
+        config["mqtt"]["username"] = mqtt.username;
+        config["mqtt"]["password"] = mqtt.password;
         serializeJson(config, file);
         file.close();
     }
@@ -189,18 +195,28 @@ void config_mode() {
 
     WiFiManagerParameter param_hostname("hostname", "Hostname", hostname.c_str(), 64);
     WiFiManagerParameter param_mqtt_server("mqtt_server", "MQTT Server", mqtt.host.c_str(), 64);
+    WiFiManagerParameter param_mqtt_port("mqtt_port", "MQTT Port", String(mqtt.port).c_str(), 64);
+    WiFiManagerParameter param_mqtt_username("mqtt_user", "MQTT Username", mqtt.username.c_str(), 64);
+    WiFiManagerParameter param_mqtt_password("mqtt_pass", "MQTT Password", mqtt.password.c_str(), 64);
     WiFiManagerParameter param_hass_topic("hass_autodiscovery_topic", "Home Assistant autodiscovery topic",
                                           hass_autodiscovery_topic.c_str(), 64);
 
     WiFiManager wifi_manager;
+
     wifi_manager.addParameter(&param_hostname);
     wifi_manager.addParameter(&param_mqtt_server);
+    wifi_manager.addParameter(&param_mqtt_port);
+    wifi_manager.addParameter(&param_mqtt_username);
+    wifi_manager.addParameter(&param_mqtt_password);
     wifi_manager.addParameter(&param_hass_topic);
 
     wifi_manager.startConfigPortal("Kelvin");
 
     hostname = param_hostname.getValue();
     mqtt.host = param_mqtt_server.getValue();
+    mqtt.port = String(param_mqtt_port.getValue()).toInt();
+    mqtt.username = param_mqtt_username.getValue();
+    mqtt.password = param_mqtt_password.getValue();
     hass_autodiscovery_topic = param_hass_topic.getValue();
 
     network_config::save();
