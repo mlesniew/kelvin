@@ -264,7 +264,7 @@ void setup() {
     {
         BLEDevice::init("");
         auto & scan = *BLEDevice::getScan();
-        scan.setActiveScan(true);
+        scan.setActiveScan(false);
         scan.setInterval(100);
         scan.setWindow(99);
 
