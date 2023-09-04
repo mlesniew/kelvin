@@ -19,6 +19,7 @@ PicoUtils::PinOutput<2, false> wifi_led;
 PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
 String hostname;
+const String board_id = String((uint32_t)ESP.getEfuseMac(), HEX);
 
 PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
@@ -26,14 +27,13 @@ PicoMQTT::Client mqtt;
 std::mutex mutex;
 
 struct Reading {
+    std::string name;
     unsigned long timestamp;
     float temperature;
     float humidity;
     unsigned int battery;
 };
 
-std::map<BLEAddress, std::string> discovered;
-std::map<BLEAddress, std::string> subscribed;
 std::map<BLEAddress, Reading> readings;
 
 void report_device(BLEAdvertisedDevice & device) {
@@ -45,27 +45,6 @@ void report_device(BLEAdvertisedDevice & device) {
     if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
         return;
     }
-
-    {
-        // add device to discovered device list
-        std::string & stored_name = discovered[address];
-
-        // store name if it was captured
-        const auto name = device.getName();
-        if (name.size()) {
-            stored_name = name;
-        }
-    }
-
-    {
-        // see if we're subscribed to the address
-        auto it = subscribed.find(address);
-        if (it == subscribed.end()) {
-            return;
-        }
-    }
-
-    Reading & reading = readings[address];
 
     for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
         if (!device.getServiceDataUUID(i).equals(THERMOMETHER_UUID)) {
@@ -98,11 +77,19 @@ void report_device(BLEAdvertisedDevice & device) {
 
         memcpy(&data, raw_data.c_str(), sizeof(data));
 
+        Reading & reading = readings[address];
+
         reading.temperature = 0.01 * (float) data.temperature;
         reading.humidity = 0.01 * (float) data.humidity;
         reading.battery = data.battery_level;
         reading.timestamp = millis();
+
+        const auto name = device.getName();
+        if (name.size()) {
+            reading.name = name;
+        }
     }
+
 }
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
@@ -112,59 +99,14 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
         }
 } scan_callbacks;
 
-namespace config {
-
-const char CONFIG_PATH[] PROGMEM = "/config.json";
-
-DynamicJsonDocument get() {
-    DynamicJsonDocument json(1024);
-
-    json["subscriptions"].to<JsonObject>();
-
-    for (const auto & kv : subscribed) {
-        auto address = kv.first;
-        json["subscriptions"][address.toString()] = kv.second;
-    }
-
-    return json;
-}
-
-void set(const JsonDocument & config) {
-    subscribed.clear();
-    const auto subscription_config = config["subscriptions"].as<JsonObjectConst>();
-    for (JsonPairConst kv : subscription_config) {
-        const auto address = BLEAddress(kv.key().c_str());
-        subscribed[address] = kv.value().as<const char *>();
-    }
-}
-
-void load() {
-    PicoUtils::JsonConfigFile<StaticJsonDocument<1024>> config(SPIFFS, FPSTR(CONFIG_PATH));
-    set(config);
-}
-
-bool save() {
-    auto file = SPIFFS.open(FPSTR(CONFIG_PATH), FILE_WRITE);
-    if (!file) {
-        return false;
-    }
-
-    const auto written = serializeJson(config::get(), file);
-    Serial.printf("Bytes written to %s: %u\n", file.path(), written);
-
-    file.close();
-    return written > 0;
-}
-
-}
-
 namespace network_config {
 
 const char CONFIG_PATH[] PROGMEM = "/network.json";
 
 void load() {
     PicoUtils::JsonConfigFile<StaticJsonDocument<256>> config(SPIFFS, FPSTR(CONFIG_PATH));
-    hostname = config["hostname"] | "kelvin";
+    const String default_hostname = "kelvin-" + board_id;
+    hostname = config["hostname"] | default_hostname;
     mqtt.host = config["mqtt"]["server"] | "calor.local";
     mqtt.port = config["mqtt"]["port"] | 1883;
     mqtt.username = config["mqtt"]["username"] | "kelvin";
@@ -226,7 +168,6 @@ void setup() {
 
     SPIFFS.begin();
     network_config::load();
-    config::load();
 
     Serial.println(F("\n\n"
                      "88  dP 888888 88     Yb    dP 88 88b 88\n"
@@ -279,14 +220,8 @@ void setup() {
             auto address = kv.first;
             const auto & reading = kv.second;
 
-            const auto it = subscribed.find(address);
-            if (it == subscribed.end()) {
-                continue;
-            }
-
-            const auto name = it->second;
-
-            auto json_element = json[name];
+            auto json_element = json[address.toString()];
+            json_element["name"] = reading.name.size() ? reading.name.c_str() : (char*) 0;
             json_element["temperature"] = reading.temperature;
             json_element["humidity"] = reading.humidity;
             json_element["battery"] = reading.battery;
@@ -294,68 +229,6 @@ void setup() {
         }
 
         server.sendJson(json);
-    });
-
-    server.on("/discovered", HTTP_GET, [] {
-        std::lock_guard<std::mutex> guard(mutex);
-        StaticJsonDocument<1024> json;
-        for (const auto & kv : discovered) {
-            auto address = kv.first;
-            const auto & name = kv.second;
-            json[address.toString()] = name;
-        }
-        server.sendJson(json);
-    });
-
-    server.on("/subscriptions", [] {
-        std::lock_guard<std::mutex> guard(mutex);
-        StaticJsonDocument<1024> json;
-        for (const auto & kv : subscribed) {
-            auto address = kv.first;
-            const auto & name = kv.second;
-            json[address.toString()] = name;
-        }
-        server.sendJson(json);
-    });
-
-    server.on("/config", HTTP_GET, [] {
-        std::lock_guard<std::mutex> guard(mutex);
-        server.sendJson(config::get());
-    });
-
-    server.on("/config/save", HTTP_POST, [] {
-        std::lock_guard<std::mutex> guard(mutex);
-        server.send(config::save() ? 200 : 500);
-    });
-
-    server.on(UriRegex("/subscriptions/((?:[a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2})"), [] {
-        std::lock_guard<std::mutex> guard(mutex);
-
-        const std::string addrstr = server.pathArg(0).c_str();
-        BLEAddress address{addrstr};
-
-        switch (server.method()) {
-            case HTTP_POST:
-            case HTTP_PUT:
-            case HTTP_PATCH:
-                subscribed[address] = server.arg("plain").c_str();
-            case HTTP_GET: {
-                auto it = subscribed.find(address);
-                if (it == subscribed.end()) {
-                    server.send(404);
-                } else {
-                    server.send(200, F("text/plain"), it->second.c_str());
-                }
-            }
-            return;
-            case HTTP_DELETE:
-                subscribed.erase(address);
-                server.send(200);
-                return;
-            default:
-                server.send(405);
-                return;
-        }
     });
 
     server.begin();
@@ -372,27 +245,19 @@ void publish_readings() {
         auto address = kv.first;
         const auto & reading = kv.second;
 
-        const auto it = subscribed.find(address);
-        if (it == subscribed.end()) {
-            // not subscribed (anymore...)
-            continue;
-        }
-
         if (reading.timestamp < last_update) {
             // already published
             continue;
         }
 
-        const auto name = it->second;
-
         Serial.printf("%s  %-16s  %6.2f  %6.2f  %3u\n",
                       address.toString().c_str(),
-                      name.c_str(),
+                      reading.name.c_str(),
                       reading.temperature,
                       reading.humidity,
                       reading.battery);
 
-        const String topic = "calor/" + hostname + "/" + name.c_str();
+        const String topic = "celsius/" + board_id + "/" + address.toString().c_str();
         mqtt.publish(topic + "/temperature", String(reading.temperature));
         mqtt.publish(topic + "/humidity", String(reading.humidity));
         mqtt.publish(topic + "/battery", String(reading.battery));
