@@ -19,7 +19,6 @@ PicoUtils::PinOutput<2, false> wifi_led;
 PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
 String hostname;
-String hass_autodiscovery_topic;
 
 PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
@@ -166,7 +165,6 @@ const char CONFIG_PATH[] PROGMEM = "/network.json";
 void load() {
     PicoUtils::JsonConfigFile<StaticJsonDocument<256>> config(SPIFFS, FPSTR(CONFIG_PATH));
     hostname = config["hostname"] | "kelvin";
-    hass_autodiscovery_topic = config["hass_autodiscovery_topic"] | "homeassistant";
     mqtt.host = config["mqtt"]["server"] | "calor.local";
     mqtt.port = config["mqtt"]["port"] | 1883;
     mqtt.username = config["mqtt"]["username"] | "kelvin";
@@ -178,7 +176,6 @@ void save() {
     if (file) {
         StaticJsonDocument<256> config;
         config["hostname"] = hostname;
-        config["hass_autodiscovery_topic"] = hass_autodiscovery_topic;
         config["mqtt"]["host"] = mqtt.host;
         config["mqtt"]["port"] = mqtt.port;
         config["mqtt"]["username"] = mqtt.username;
@@ -198,8 +195,6 @@ void config_mode() {
     WiFiManagerParameter param_mqtt_port("mqtt_port", "MQTT Port", String(mqtt.port).c_str(), 64);
     WiFiManagerParameter param_mqtt_username("mqtt_user", "MQTT Username", mqtt.username.c_str(), 64);
     WiFiManagerParameter param_mqtt_password("mqtt_pass", "MQTT Password", mqtt.password.c_str(), 64);
-    WiFiManagerParameter param_hass_topic("hass_autodiscovery_topic", "Home Assistant autodiscovery topic",
-                                          hass_autodiscovery_topic.c_str(), 64);
 
     WiFiManager wifi_manager;
 
@@ -208,7 +203,6 @@ void config_mode() {
     wifi_manager.addParameter(&param_mqtt_port);
     wifi_manager.addParameter(&param_mqtt_username);
     wifi_manager.addParameter(&param_mqtt_password);
-    wifi_manager.addParameter(&param_hass_topic);
 
     wifi_manager.startConfigPortal("Kelvin");
 
@@ -217,7 +211,6 @@ void config_mode() {
     mqtt.port = String(param_mqtt_port.getValue()).toInt();
     mqtt.username = param_mqtt_username.getValue();
     mqtt.password = param_mqtt_password.getValue();
-    hass_autodiscovery_topic = param_hass_topic.getValue();
 
     network_config::save();
 }
@@ -408,73 +401,6 @@ void publish_readings() {
     last_update = millis();
 }
 
-PicoUtils::PeriodicRun hass_autodiscovery(300, 30, [] {
-    if (hass_autodiscovery_topic.length() == 0) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> guard(mutex);
-
-    Serial.println("Home assistant autodiscovery announcement...");
-
-    const String mac(ESP.getEfuseMac(), HEX);
-
-    struct Entity {
-        String name;
-        String icon;
-        String device_class;
-        String unit_of_measurement;
-    };
-
-    static const Entity entities[] = {
-        {F("temperature"), F("mdi:thermometer"), F("temperature"), F("°C")},
-        {F("humidity"), F("mdi:cloud-percent"), F("humidity"), F("%")},
-        {F("battery"), F("mdi:battery"), F("battery"), F("%")},
-    };
-
-    for (const auto & kv : subscribed) {
-        auto address = kv.first;
-        auto discovered_it = discovered.find(address);
-        if (discovered_it == discovered.end()) {
-            continue;
-        }
-        auto device_name = discovered_it->second;
-
-        auto device_id = String(address.toString().c_str());
-        device_id.replace(":", "");
-
-        for (const auto & entity : entities) {
-            const auto unique_id = device_id + "-" + entity.name;
-            const auto & name = kv.second;
-
-            // TODO: should we drop hostname (node_id)?
-            const String topic = hass_autodiscovery_topic + "/sensor/" + hostname + "/" + unique_id + "/config";
-
-            StaticJsonDocument<1024> json;
-            json[F("unique_id")] = unique_id;
-            json[F("expire_after")] = 120;
-            json[F("state_class")] = "measurement";
-
-            json[F("state_topic")] = "calor/" + hostname + "/" + name.c_str() + "/" + entity.name;
-            json[F("name")] = entity.name;
-            json[F("icon")] = entity.icon;
-            json[F("device_class")] = entity.device_class;
-            json[F("unit_of_measurement")] = entity.unit_of_measurement;
-
-            auto device = json[F("device")];
-            device["name"] = device_name;
-            device["suggested_area"] = name;
-            device["identifiers"][0] = device_id;
-            device["model"] = "Wireless temperature and humidity sensor";
-            device["via_device"] = mac;
-
-            auto publish = mqtt.begin_publish(topic, measureJson(json));
-            serializeJson(json, publish);
-            publish.send();
-        }
-    }
-});
-
 void update_status_led() {
     if (WiFi.status() == WL_CONNECTED) {
         if (mqtt.connected()) {
@@ -493,5 +419,4 @@ void loop() {
     server.handleClient();
     mqtt.loop();
     publish_readings();
-    hass_autodiscovery.tick();
 }
