@@ -14,6 +14,8 @@
 #include <PicoUtils.h>
 #include <WiFiManager.h>
 
+#include "reading.h"
+
 PicoUtils::PinInput<0, true> button;
 PicoUtils::PinOutput<2, false> wifi_led;
 PicoUtils::Blink led_blinker(wifi_led, 0, 91);
@@ -26,76 +28,22 @@ PicoMQTT::Client mqtt;
 
 std::mutex mutex;
 
-struct Reading {
-    std::string name;
-    unsigned long timestamp;
-    float temperature;
-    float humidity;
-    unsigned int battery;
-};
-
 std::map<BLEAddress, Reading> readings;
-
-void report_device(BLEAdvertisedDevice & device) {
-
-    static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
-    static const BLEUUID THERMOMETHER_UUID{(uint16_t) 0x181a};
-
-    auto address = device.getAddress();
-    if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
-        return;
-    }
-
-    for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
-        if (!device.getServiceDataUUID(i).equals(THERMOMETHER_UUID)) {
-            continue;
-        }
-
-        const auto raw_data = device.getServiceData();
-
-        struct {
-            // uint8_t     size;   // = 18
-            // uint8_t     uid;    // = 0x16, 16-bit UUID
-            // uint16_t    UUID;   // = 0x181A, GATT Service 0x181A Environmental Sensing
-            uint8_t     MAC[6]; // [0] - lo, .. [6] - hi digits
-            int16_t     temperature;    // x 0.01 degree
-            uint16_t    humidity;       // x 0.01 %
-            uint16_t    battery_mv;     // mV
-            uint8_t     battery_level;  // 0..100 %
-            uint8_t     counter;        // measurement count
-            uint8_t     flags;  // GPIO_TRG pin (marking "reset" on circuit board) flags:
-            // bit0: Reed Switch, input
-            // bit1: GPIO_TRG pin output value (pull Up/Down)
-            // bit2: Output GPIO_TRG pin is controlled according to the set parameters
-            // bit3: Temperature trigger event
-            // bit4: Humidity trigger event
-        } __attribute__((packed)) data;
-
-        if (sizeof(data) != raw_data.size()) {
-            continue;
-        }
-
-        memcpy(&data, raw_data.c_str(), sizeof(data));
-
-        Reading & reading = readings[address];
-
-        reading.temperature = 0.01 * (float) data.temperature;
-        reading.humidity = 0.01 * (float) data.humidity;
-        reading.battery = data.battery_level;
-        reading.timestamp = millis();
-
-        const auto name = device.getName();
-        if (name.size()) {
-            reading.name = name;
-        }
-    }
-
-}
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
         void onResult(BLEAdvertisedDevice advertisedDevice) override {
             std::lock_guard<std::mutex> guard(mutex);
-            report_device(advertisedDevice);
+            static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
+
+            auto address = advertisedDevice.getAddress();
+            if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
+                return;
+            }
+
+            auto emplace_result = readings.emplace(address, address);
+            auto it = emplace_result.first;
+
+            it->second.update(advertisedDevice);
         }
 } scan_callbacks;
 
@@ -219,13 +167,7 @@ void setup() {
         for (const auto & kv : readings) {
             auto address = kv.first;
             const auto & reading = kv.second;
-
-            auto json_element = json[address.toString()];
-            json_element["name"] = reading.name.size() ? reading.name.c_str() : (char*) 0;
-            json_element["temperature"] = reading.temperature;
-            json_element["humidity"] = reading.humidity;
-            json_element["battery"] = reading.battery;
-            json_element["age"] = (millis() - reading.timestamp) / 1000;
+            json[address.toString()] = reading.get_json();
         }
 
         server.sendJson(json);
@@ -237,33 +179,12 @@ void setup() {
 }
 
 void publish_readings() {
-    static unsigned long last_update = 0;
-
     std::lock_guard<std::mutex> guard(mutex);
 
     for (const auto & kv : readings) {
-        auto address = kv.first;
         const auto & reading = kv.second;
-
-        if (reading.timestamp < last_update) {
-            // already published
-            continue;
-        }
-
-        Serial.printf("%s  %-16s  %6.2f  %6.2f  %3u\n",
-                      address.toString().c_str(),
-                      reading.name.c_str(),
-                      reading.temperature,
-                      reading.humidity,
-                      reading.battery);
-
-        const String topic = "celsius/" + board_id + "/" + address.toString().c_str();
-        mqtt.publish(topic + "/temperature", String(reading.temperature));
-        mqtt.publish(topic + "/humidity", String(reading.humidity));
-        mqtt.publish(topic + "/battery", String(reading.battery));
+        reading.publish(mqtt);
     }
-
-    last_update = millis();
 }
 
 void update_status_led() {
