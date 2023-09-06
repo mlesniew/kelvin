@@ -50,6 +50,7 @@ void Reading::update(BLEAdvertisedDevice & device) {
         temperature = 0.01 * (float) data.temperature;
         humidity = 0.01 * (float) data.humidity;
         battery = data.battery_level;
+        voltage = 0.001 * (float) data.battery_mv;
         timestamp = millis();
 
         publish_pending = true;
@@ -63,7 +64,8 @@ DynamicJsonDocument Reading::get_json() const {
     json["name"] = name.size() ? name.c_str() : (char *) 0;
     json["temperature"] = temperature;
     json["humidity"] = humidity;
-    json["battery"] = battery;
+    json["battery"]["percentage"] = battery;
+    json["battery"]["voltage"] = voltage;
     json["age"] = (millis() - timestamp) / 1000;
     json["rssi"] = rssi;
     return json;

@@ -30,4 +30,5 @@ class Reading {
         float humidity;
         unsigned int battery;
         int rssi;
+        float voltage;
 };

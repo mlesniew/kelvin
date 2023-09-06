@@ -179,7 +179,7 @@ void setup() {
     server.on("/readings", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
 
-        StaticJsonDocument<1024> json;
+        DynamicJsonDocument json(2048);
 
         for (const auto & kv : readings) {
             auto address = kv.first;
