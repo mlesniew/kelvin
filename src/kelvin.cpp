@@ -33,26 +33,26 @@ bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
-public:
-    static bool active_scan_required;
+    public:
+        static bool active_scan_required;
 
-    void onResult(BLEAdvertisedDevice advertisedDevice) override {
-        std::lock_guard<std::mutex> guard(mutex);
-        static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
+        void onResult(BLEAdvertisedDevice advertisedDevice) override {
+            std::lock_guard<std::mutex> guard(mutex);
+            static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
 
-        auto address = advertisedDevice.getAddress();
-        if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
-            return;
+            auto address = advertisedDevice.getAddress();
+            if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
+                return;
+            }
+
+            auto emplace_result = readings.emplace(address, address);
+            auto & reading = emplace_result.first->second;
+            const bool is_new_element = emplace_result.second;
+
+            reading.update(advertisedDevice);
+
+            active_scan_required = active_scan_required || (is_new_element && !reading.has_name());
         }
-
-        auto emplace_result = readings.emplace(address, address);
-        auto & reading = emplace_result.first->second;
-        const bool is_new_element = emplace_result.second;
-
-        reading.update(advertisedDevice);
-
-        active_scan_required = active_scan_required || (is_new_element && !reading.has_name());
-    }
 } scan_callbacks;
 
 bool ScanCallbacks::active_scan_required;

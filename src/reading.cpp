@@ -12,8 +12,9 @@ void Reading::update(BLEAdvertisedDevice & device) {
 
     {
         auto new_name = device.getName();
-        if (new_name.size())
+        if (new_name.size()) {
             name = new_name;
+        }
     }
 
     for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
@@ -34,11 +35,11 @@ void Reading::update(BLEAdvertisedDevice & device) {
             uint8_t     battery_level;  // 0..100 %
             uint8_t     counter;        // measurement count
             uint8_t     flags;  // GPIO_TRG pin (marking "reset" on circuit board) flags:
-                                // bit0: Reed Switch, input
-                                // bit1: GPIO_TRG pin output value (pull Up/Down)
-                                // bit2: Output GPIO_TRG pin is controlled according to the set parameters
-                                // bit3: Temperature trigger event
-                                // bit4: Humidity trigger event
+            // bit0: Reed Switch, input
+            // bit1: GPIO_TRG pin output value (pull Up/Down)
+            // bit2: Output GPIO_TRG pin is controlled according to the set parameters
+            // bit3: Temperature trigger event
+            // bit4: Humidity trigger event
         } __attribute__((packed)) data;
 
         if (sizeof(data) != raw_data.size()) {
@@ -60,7 +61,7 @@ void Reading::update(BLEAdvertisedDevice & device) {
 
 DynamicJsonDocument Reading::get_json() const {
     DynamicJsonDocument json(256);
-    json["name"] = name.size() ? name.c_str() : (char*) 0;
+    json["name"] = name.size() ? name.c_str() : (char *) 0;
     json["temperature"] = temperature;
     json["humidity"] = humidity;
     json["battery"] = battery;
@@ -69,8 +70,9 @@ DynamicJsonDocument Reading::get_json() const {
 }
 
 void Reading::publish(PicoMQTT::Publisher & mqtt, bool force) const {
-    if (!(publish_pending || force))
+    if (!(publish_pending || force)) {
         return;
+    }
 
     static const String topic_prefix = "celsius/" + String((uint32_t)ESP.getEfuseMac(), HEX) + "/";
     const String topic = topic_prefix + address;

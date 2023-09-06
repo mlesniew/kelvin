@@ -7,7 +7,7 @@ class BLEAddress;
 class BLEAdvertisedDevice;
 
 namespace PicoMQTT {
-    class Publisher;
+class Publisher;
 };
 
 class Reading {
