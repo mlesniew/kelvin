@@ -27,25 +27,35 @@ PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
 
 std::mutex mutex;
-
 std::map<BLEAddress, Reading> readings;
 
+bool active_scan_enabled;
+PicoUtils::Stopwatch active_scan_stopwatch;
+
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
-        void onResult(BLEAdvertisedDevice advertisedDevice) override {
-            std::lock_guard<std::mutex> guard(mutex);
-            static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
+public:
+    static bool active_scan_required;
 
-            auto address = advertisedDevice.getAddress();
-            if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
-                return;
-            }
+    void onResult(BLEAdvertisedDevice advertisedDevice) override {
+        std::lock_guard<std::mutex> guard(mutex);
+        static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
 
-            auto emplace_result = readings.emplace(address, address);
-            auto it = emplace_result.first;
-
-            it->second.update(advertisedDevice);
+        auto address = advertisedDevice.getAddress();
+        if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
+            return;
         }
+
+        auto emplace_result = readings.emplace(address, address);
+        auto & reading = emplace_result.first->second;
+        const bool is_new_element = emplace_result.second;
+
+        reading.update(advertisedDevice);
+
+        active_scan_required = active_scan_required || (is_new_element && !reading.has_name());
+    }
 } scan_callbacks;
+
+bool ScanCallbacks::active_scan_required;
 
 namespace network_config {
 
@@ -105,6 +115,23 @@ void config_mode() {
     network_config::save();
 }
 
+void restart_scan() {
+    auto & scan = *BLEDevice::getScan();
+    scan.stop();
+
+    scan.setActiveScan(active_scan_enabled);
+    scan.setInterval(100);
+    scan.setWindow(99);
+
+    scan.setAdvertisedDeviceCallbacks(
+        &scan_callbacks,
+        true /* allow duplicates */,
+        true /* parse */);
+
+    // scan forever
+    scan.start(0, nullptr, false);
+}
+
 void setup() {
     wifi_led.init();
     led_blinker.set_pattern(0b10);
@@ -145,18 +172,8 @@ void setup() {
 
     {
         BLEDevice::init("");
-        auto & scan = *BLEDevice::getScan();
-        scan.setActiveScan(false);
-        scan.setInterval(100);
-        scan.setWindow(99);
-
-        scan.setAdvertisedDeviceCallbacks(
-            &scan_callbacks,
-            true /* allow duplicates */,
-            true /* parse */);
-
-        // scan forever
-        scan.start(0, nullptr, false);
+        active_scan_enabled = false;
+        restart_scan();
     }
 
     server.on("/readings", HTTP_GET, [] {
@@ -181,10 +198,31 @@ void setup() {
 void publish_readings() {
     std::lock_guard<std::mutex> guard(mutex);
 
+    bool got_all_names = true;
+
     for (const auto & kv : readings) {
         const auto & reading = kv.second;
-        reading.publish(mqtt);
+        if (reading.has_name()) {
+            reading.publish(mqtt);
+        } else {
+            got_all_names = false;
+        }
     }
+
+    if (active_scan_enabled && (got_all_names || (active_scan_stopwatch.elapsed() >= 10))) {
+        Serial.println(F("Disabling active scan."));
+        active_scan_enabled = false;
+        restart_scan();
+    } else if (ScanCallbacks::active_scan_required) {
+        active_scan_stopwatch.reset();
+        if (!active_scan_enabled) {
+            Serial.println(F("Enabling active scan."));
+            active_scan_enabled = true;
+            restart_scan();
+        }
+    }
+
+    ScanCallbacks::active_scan_required = false;
 }
 
 void update_status_led() {

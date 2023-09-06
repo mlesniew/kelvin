@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <ArduinoJson.h>
 
 class BLEAddress;
@@ -17,6 +18,8 @@ class Reading {
 
         DynamicJsonDocument get_json() const;
         void publish(PicoMQTT::Publisher & mqtt, bool force = false) const;
+
+        bool has_name() const { return name.size() > 0; }
 
     protected:
         const String address;
