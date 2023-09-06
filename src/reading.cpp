@@ -47,10 +47,10 @@ void Reading::update(BLEAdvertisedDevice & device) {
 
         memcpy(&data, raw_data.c_str(), sizeof(data));
 
-        temperature = 0.01 * (float) data.temperature;
-        humidity = 0.01 * (float) data.humidity;
+        temperature = 0.01 * (double) data.temperature;
+        humidity = 0.01 * (double) data.humidity;
         battery = data.battery_level;
-        voltage = 0.001 * (float) data.battery_mv;
+        voltage = 0.001 * (double) data.battery_mv;
         timestamp = millis();
 
         publish_pending = true;

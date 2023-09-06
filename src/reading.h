@@ -26,9 +26,9 @@ class Reading {
         std::string name;
         mutable bool publish_pending;
         unsigned long timestamp;
-        float temperature;
-        float humidity;
+        double temperature;
+        double humidity;
         unsigned int battery;
         int rssi;
-        float voltage;
+        double voltage;
 };
