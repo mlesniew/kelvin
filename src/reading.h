@@ -29,4 +29,5 @@ class Reading {
         float temperature;
         float humidity;
         unsigned int battery;
+        int rssi;
 };

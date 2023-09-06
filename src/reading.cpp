@@ -10,12 +10,11 @@ Reading::Reading(/* const */ BLEAddress & address) : address(address.toString().
 void Reading::update(BLEAdvertisedDevice & device) {
     static const BLEUUID THERMOMETHER_UUID{(uint16_t) 0x181a};
 
-    {
-        auto new_name = device.getName();
-        if (new_name.size()) {
-            name = new_name;
-        }
+    if (device.haveName()) {
+        name = device.getName();
     }
+
+    rssi = device.getRSSI();
 
     for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
         if (!device.getServiceDataUUID(i).equals(THERMOMETHER_UUID)) {
@@ -66,6 +65,7 @@ DynamicJsonDocument Reading::get_json() const {
     json["humidity"] = humidity;
     json["battery"] = battery;
     json["age"] = (millis() - timestamp) / 1000;
+    json["rssi"] = rssi;
     return json;
 }
 
