@@ -247,9 +247,20 @@ void update_status_led() {
     led_blinker.tick();
 };
 
+void check_mqtt() {
+    static PicoUtils::Stopwatch connection_loss_time;
+    if (mqtt.connected()) {
+        connection_loss_time.reset();
+    } else if (connection_loss_time.elapsed() >= 10 * 60) {
+        Serial.println("Couldn't establish MQTT connection for too long.  Rebooting...");
+        ESP.restart();
+    }
+}
+
 void loop() {
     update_status_led();
     server.handleClient();
     mqtt.loop();
+    check_mqtt();
     publish_readings();
 }
