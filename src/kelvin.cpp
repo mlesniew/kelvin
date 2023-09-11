@@ -11,9 +11,11 @@
 
 #include <ArduinoJson.h>
 #include <PicoMQTT.h>
+#include <PicoPrometheus.h>
 #include <PicoUtils.h>
 #include <WiFiManager.h>
 
+#include "globals.h"
 #include "reading.h"
 
 PicoUtils::PinInput<0, true> button;
@@ -26,11 +28,14 @@ const String board_id = String((uint32_t)ESP.getEfuseMac(), HEX);
 PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
 
-std::mutex mutex;
 std::map<BLEAddress, Reading> readings;
 
 bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
+
+namespace Metrics {
+PicoPrometheus::Gauge free_heap(prometheus, "esp_free_heap", "Free heap memory in bytes", [] { return ESP.getFreeHeap(); });
+}
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
     public:
@@ -190,6 +195,10 @@ void setup() {
         server.sendJson(json);
     });
 
+    prometheus.labels["module"] = "kelvin";
+    prometheus.labels["board"] = board_id.c_str();
+
+    prometheus.register_metrics_endpoint(server);
     server.begin();
     mqtt.begin();
     led_blinker.set_pattern(1);

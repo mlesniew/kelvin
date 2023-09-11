@@ -2,16 +2,42 @@
 #include <BLEScan.h>
 #include <PicoMQTT.h>
 
+#include "globals.h"
 #include "reading.h"
 
-Reading::Reading(/* const */ BLEAddress & address) : address(address.toString().c_str()) {
+namespace Metrics {
+PicoPrometheus::Gauge temperature(prometheus, "air_temperature", "Air temperature in degrees Celsius");
+PicoPrometheus::Gauge humidity(prometheus, "air_humidity", "Relative air humidity in percent");
+PicoPrometheus::Gauge battery_level(prometheus, "battery_level", "Battery level in percent");
+PicoPrometheus::Gauge battery_voltage(prometheus, "battery_voltage", "Battery voltage in volts");
+PicoPrometheus::Gauge rssi(prometheus, "ble_rssi", "BLE device RSSI in dBm");
+PicoPrometheus::Histogram update_interval(prometheus, "update_interval", "Sensor beacon interval in seconds");
+}
+
+Reading::Reading(/* const */ BLEAddress & address) : address(address.toString().c_str()), timestamp(0) {
 }
 
 void Reading::update(BLEAdvertisedDevice & device) {
     static const BLEUUID THERMOMETHER_UUID{(uint16_t) 0x181a};
 
-    if (device.haveName()) {
+    bool init_metrics = false;
+
+    if (name.size() == 0) {
+        if (!device.haveName()) {
+            return;
+        }
         name = device.getName();
+        init_metrics = true;
+    }
+
+    const PicoPrometheus::Labels labels = {{"name", name.c_str()}, {"address", address.c_str()}};
+
+    if (init_metrics) {
+        Metrics::temperature[labels].bind(temperature);
+        Metrics::humidity[labels].bind(humidity);
+        Metrics::battery_level[labels].bind(battery);
+        Metrics::battery_voltage[labels].bind(voltage);
+        Metrics::rssi[labels].bind(rssi);
     }
 
     rssi = device.getRSSI();
@@ -51,10 +77,15 @@ void Reading::update(BLEAdvertisedDevice & device) {
         humidity = 0.01 * (double) data.humidity;
         battery = data.battery_level;
         voltage = 0.001 * (double) data.battery_mv;
-        timestamp = millis();
+
+        const unsigned long now = millis();
+        if (timestamp) {
+            unsigned long elapsed_time = now - timestamp;
+            Metrics::update_interval[labels].observe(double(elapsed_time) * 0.001);
+        }
+        timestamp = now;
 
         publish_pending = true;
-
         break;
     }
 }
