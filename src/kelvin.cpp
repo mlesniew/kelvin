@@ -23,7 +23,6 @@ PicoUtils::PinOutput<2, false> wifi_led;
 PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
 String hostname;
-const String board_id = String((uint32_t)ESP.getEfuseMac(), HEX);
 
 PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
@@ -68,7 +67,7 @@ const char CONFIG_PATH[] PROGMEM = "/network.json";
 
 void load() {
     PicoUtils::JsonConfigFile<StaticJsonDocument<256>> config(SPIFFS, FPSTR(CONFIG_PATH));
-    const String default_hostname = "kelvin-" + board_id;
+    const String default_hostname = "kelvin-" + get_board_id();
     hostname = config["hostname"] | default_hostname;
     mqtt.host = config["mqtt"]["server"] | "calor.local";
     mqtt.port = config["mqtt"]["port"] | 1883;
@@ -196,7 +195,7 @@ void setup() {
     });
 
     prometheus.labels["module"] = "kelvin";
-    prometheus.labels["board"] = board_id.c_str();
+    prometheus.labels["board"] = get_board_id();
 
     prometheus.register_metrics_endpoint(server);
     server.begin();

@@ -107,7 +107,7 @@ void Reading::publish(PicoMQTT::Publisher & mqtt, bool force) const {
         return;
     }
 
-    static const String topic_prefix = "celsius/" + String((uint32_t)ESP.getEfuseMac(), HEX) + "/";
+    static const String topic_prefix = "celsius/" + get_board_id() + "/";
     const String topic = topic_prefix + address;
     const auto json = get_json();
 
