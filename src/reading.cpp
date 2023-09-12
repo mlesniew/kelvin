@@ -11,7 +11,8 @@ PicoPrometheus::Gauge humidity(prometheus, "air_humidity", "Relative air humidit
 PicoPrometheus::Gauge battery_level(prometheus, "battery_level", "Battery level in percent");
 PicoPrometheus::Gauge battery_voltage(prometheus, "battery_voltage", "Battery voltage in volts");
 PicoPrometheus::Gauge rssi(prometheus, "ble_rssi", "BLE device RSSI in dBm");
-PicoPrometheus::Histogram update_interval(prometheus, "update_interval", "Sensor beacon interval in seconds");
+PicoPrometheus::Histogram update_interval(prometheus, "update_interval", "Sensor beacon interval in seconds",
+{1, 5, 10, 15, 30, 45, 60, 90, 120, 300});
 }
 
 Reading::Reading(/* const */ BLEAddress & address) : address(address.toString().c_str()), timestamp(0) {
