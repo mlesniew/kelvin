@@ -2,7 +2,7 @@
 #include <map>
 
 #include <Arduino.h>
-
+#include <ArduinoOTA.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <SPIFFS.h>
@@ -24,6 +24,7 @@ PicoUtils::PinOutput<2, false> wifi_led;
 PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
 String hostname;
+String ota_password;
 
 PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
@@ -77,6 +78,7 @@ void load() {
     mqtt.password = config["mqtt"]["password"] | "harara";
     syslog.server = config["syslog"] | "192.168.1.100";
     syslog.host = hostname;
+    ota_password = config["ota_password"] | "";
 }
 
 void save() {
@@ -89,6 +91,7 @@ void save() {
         config["mqtt"]["username"] = mqtt.username;
         config["mqtt"]["password"] = mqtt.password;
         config["syslog"] = syslog.server;
+        config["ota_password"] = ota_password;
         serializeJson(config, file);
         file.close();
     }
@@ -105,6 +108,7 @@ void config_mode() {
     WiFiManagerParameter param_mqtt_username("mqtt_user", "MQTT Username", mqtt.username.c_str(), 64);
     WiFiManagerParameter param_mqtt_password("mqtt_pass", "MQTT Password", mqtt.password.c_str(), 64);
     WiFiManagerParameter param_syslog("syslog", "Syslog server", syslog.server.c_str(), 64);
+    WiFiManagerParameter param_ota_password("ota_password", "OTA password", ota_password.c_str(), 64);
 
     WiFiManager wifi_manager;
 
@@ -114,6 +118,7 @@ void config_mode() {
     wifi_manager.addParameter(&param_mqtt_username);
     wifi_manager.addParameter(&param_mqtt_password);
     wifi_manager.addParameter(&param_syslog);
+    wifi_manager.addParameter(&param_ota_password);
 
     wifi_manager.startConfigPortal("Kelvin");
 
@@ -125,6 +130,7 @@ void config_mode() {
     mqtt.username = param_mqtt_username.getValue();
     mqtt.password = param_mqtt_password.getValue();
     syslog.server = param_syslog.getValue();
+    ota_password = param_ota_password.getValue();
 
     network_config::save();
 }
@@ -210,6 +216,15 @@ void setup() {
     prometheus.register_metrics_endpoint(server);
     server.begin();
     mqtt.begin();
+
+    {
+        ArduinoOTA.setHostname(hostname.c_str());
+        if (ota_password.length()) {
+            ArduinoOTA.setPassword(ota_password.c_str());
+        }
+        ArduinoOTA.begin();
+    }
+
     led_blinker.set_pattern(1);
 }
 
@@ -274,6 +289,8 @@ void check_mqtt() {
 }
 
 void loop() {
+    ArduinoOTA.handle();
+
     update_status_led();
     server.handleClient();
     mqtt.loop();
