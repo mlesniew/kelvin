@@ -12,6 +12,7 @@
 #include <ArduinoJson.h>
 #include <PicoMQTT.h>
 #include <PicoPrometheus.h>
+#include <PicoSyslog.h>
 #include <PicoUtils.h>
 #include <WiFiManager.h>
 
@@ -26,6 +27,7 @@ String hostname;
 
 PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
+PicoSyslog::Logger syslog("kelvin");
 
 std::map<BLEAddress, Reading> readings;
 
@@ -73,6 +75,8 @@ void load() {
     mqtt.port = config["mqtt"]["port"] | 1883;
     mqtt.username = config["mqtt"]["username"] | "kelvin";
     mqtt.password = config["mqtt"]["password"] | "harara";
+    syslog.server = config["syslog"] | "192.168.1.100";
+    syslog.host = hostname;
 }
 
 void save() {
@@ -84,6 +88,7 @@ void save() {
         config["mqtt"]["port"] = mqtt.port;
         config["mqtt"]["username"] = mqtt.username;
         config["mqtt"]["password"] = mqtt.password;
+        config["syslog"] = syslog.server;
         serializeJson(config, file);
         file.close();
     }
@@ -99,6 +104,7 @@ void config_mode() {
     WiFiManagerParameter param_mqtt_port("mqtt_port", "MQTT Port", String(mqtt.port).c_str(), 64);
     WiFiManagerParameter param_mqtt_username("mqtt_user", "MQTT Username", mqtt.username.c_str(), 64);
     WiFiManagerParameter param_mqtt_password("mqtt_pass", "MQTT Password", mqtt.password.c_str(), 64);
+    WiFiManagerParameter param_syslog("syslog", "Syslog server", syslog.server.c_str(), 64);
 
     WiFiManager wifi_manager;
 
@@ -107,14 +113,18 @@ void config_mode() {
     wifi_manager.addParameter(&param_mqtt_port);
     wifi_manager.addParameter(&param_mqtt_username);
     wifi_manager.addParameter(&param_mqtt_password);
+    wifi_manager.addParameter(&param_syslog);
 
     wifi_manager.startConfigPortal("Kelvin");
+
+    hostname = param_hostname.getValue();
 
     hostname = param_hostname.getValue();
     mqtt.host = param_mqtt_server.getValue();
     mqtt.port = String(param_mqtt_port.getValue()).toInt();
     mqtt.username = param_mqtt_username.getValue();
     mqtt.password = param_mqtt_password.getValue();
+    syslog.server = param_syslog.getValue();
 
     network_config::save();
 }
@@ -218,13 +228,13 @@ void publish_readings() {
     }
 
     if (active_scan_enabled && (got_all_names || (active_scan_stopwatch.elapsed() >= 10))) {
-        Serial.println(F("Disabling active scan."));
+        syslog.println(F("Disabling active scan."));
         active_scan_enabled = false;
         restart_scan();
     } else if (ScanCallbacks::active_scan_required) {
         active_scan_stopwatch.reset();
         if (!active_scan_enabled) {
-            Serial.println(F("Enabling active scan."));
+            syslog.println(F("Enabling active scan."));
             active_scan_enabled = true;
             restart_scan();
         }
@@ -237,17 +247,15 @@ void update_status_led() {
     static bool wifi_was_connected = false;
     if (WiFi.status() == WL_CONNECTED) {
         if (!wifi_was_connected) {
-            Serial.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+            syslog.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
         }
         if (mqtt.connected()) {
-            led_blinker.set_pattern(uint64_t(0b101) << 60);
-        } else {
             led_blinker.set_pattern(uint64_t(0b1) << 60);
         }
         wifi_was_connected = true;
     } else {
         if (wifi_was_connected) {
-            Serial.println("WiFi connection lost.");
+            syslog.println("WiFi connection lost.");
         }
         led_blinker.set_pattern(0b1100);
         wifi_was_connected = false;
@@ -260,7 +268,7 @@ void check_mqtt() {
     if (mqtt.connected()) {
         connection_loss_time.reset();
     } else if (connection_loss_time.elapsed() >= 10 * 60) {
-        Serial.println("Couldn't establish MQTT connection for too long.  Rebooting...");
+        syslog.println("Couldn't establish MQTT connection for too long.  Rebooting...");
         ESP.restart();
     }
 }
