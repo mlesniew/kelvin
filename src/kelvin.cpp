@@ -186,10 +186,6 @@ void setup() {
     WiFi.softAPdisconnect(true);
     WiFi.begin();
 
-    if (!MDNS.begin(hostname.c_str())) {
-        Serial.println(F("MDNS init failed"));
-    }
-
     {
         BLEDevice::init("");
         active_scan_enabled = false;
