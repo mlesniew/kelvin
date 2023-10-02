@@ -1,6 +1,5 @@
 #include <BLEDevice.h>
 #include <BLEScan.h>
-#include <PicoMQTT.h>
 
 #include "globals.h"
 #include "reading.h"
@@ -10,40 +9,45 @@ PicoPrometheus::Gauge temperature(prometheus, "air_temperature", "Air temperatur
 PicoPrometheus::Gauge humidity(prometheus, "air_humidity", "Relative air humidity in percent");
 PicoPrometheus::Gauge battery_level(prometheus, "battery_level", "Battery level in percent");
 PicoPrometheus::Gauge battery_voltage(prometheus, "battery_voltage", "Battery voltage in volts");
-PicoPrometheus::Gauge rssi(prometheus, "ble_rssi", "BLE device RSSI in dBm");
 PicoPrometheus::Histogram update_interval(prometheus, "update_interval", "Sensor beacon interval in seconds",
 {1, 5, 10, 15, 30, 45, 60, 90, 120, 300});
 }
 
-Reading::Reading(/* const */ BLEAddress & address) : address(address.toString().c_str()), timestamp(0) {
+Readings::Readings(const BluetoothDevice & sensor): sensor(sensor) {
+    const auto labels = sensor.get_labels();
+    Metrics::temperature[labels].bind(temperature);
+    Metrics::humidity[labels].bind(humidity);
+    Metrics::battery_level[labels].bind(battery_level);
+    Metrics::battery_voltage[labels].bind(battery_voltage);
 }
 
-void Reading::update(BLEAdvertisedDevice & device) {
-    static const BLEUUID THERMOMETHER_UUID{(uint16_t) 0x181a};
+Readings::~Readings() {
+    const auto labels = sensor.get_labels();
+    Metrics::temperature.remove(labels);
+    Metrics::humidity.remove(labels);
+    Metrics::battery_level.remove(labels);
+    Metrics::battery_voltage.remove(labels);
+}
 
-    bool init_metrics = false;
+BluetoothDevice::BluetoothDevice(/* const */ BLEAddress & address) : address(address.toString().c_str()) {}
 
-    if (name.size() == 0) {
+PicoPrometheus::Labels BluetoothDevice::get_labels() const {
+    return {{"name", name.c_str()}, {"address", address.c_str()}};
+};
+
+void BluetoothDevice::update(BLEAdvertisedDevice & device) {
+    last_seen.reset();
+
+    if (name.length() == 0) {
         if (!device.haveName()) {
             return;
         }
-        name = device.getName();
-        init_metrics = true;
+        name = device.getName().c_str();
     }
-
-    const PicoPrometheus::Labels labels = {{"name", name.c_str()}, {"address", address.c_str()}};
-
-    if (init_metrics) {
-        Metrics::temperature[labels].bind(temperature);
-        Metrics::humidity[labels].bind(humidity);
-        Metrics::battery_level[labels].bind(battery);
-        Metrics::battery_voltage[labels].bind(voltage);
-        Metrics::rssi[labels].bind(rssi);
-    }
-
-    rssi = device.getRSSI();
 
     for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
+        static const BLEUUID THERMOMETHER_UUID{(uint16_t) 0x181a};
+
         if (!device.getServiceDataUUID(i).equals(THERMOMETHER_UUID)) {
             continue;
         }
@@ -74,51 +78,35 @@ void Reading::update(BLEAdvertisedDevice & device) {
 
         memcpy(&data, raw_data.c_str(), sizeof(data));
 
-        temperature = 0.01 * (double) data.temperature;
-        humidity = 0.01 * (double) data.humidity;
-        battery = data.battery_level;
-        voltage = 0.001 * (double) data.battery_mv;
-
-        const unsigned long now = millis();
-        if (timestamp) {
-            unsigned long elapsed_time = now - timestamp;
-            Metrics::update_interval[labels].observe(double(elapsed_time) * 0.001);
+        const bool first_reading = !readings;
+        if (first_reading) {
+            readings.reset(new Readings(*this));
         }
-        timestamp = now;
 
-        publish_pending = true;
+        readings->temperature = 0.01 * (double) data.temperature;
+        readings->humidity = 0.01 * (double) data.humidity;
+        readings->battery_level = data.battery_level;
+        readings->battery_voltage = 0.001 * (double) data.battery_mv;
+
+        if (!first_reading) {
+            Metrics::update_interval[get_labels()].observe(double(readings->last_update.elapsed()));
+        }
+        readings->last_update.reset();
+
         break;
     }
 }
 
-DynamicJsonDocument Reading::get_json() const {
+DynamicJsonDocument BluetoothDevice::get_json() const {
     DynamicJsonDocument json(256);
-    json["name"] = name.size() ? name.c_str() : (char *) 0;
-    json["temperature"] = temperature;
-    json["humidity"] = humidity;
-    json["battery"]["percentage"] = battery;
-    json["battery"]["voltage"] = voltage;
-    json["age"] = (millis() - timestamp) / 1000;
-    json["rssi"] = rssi;
-    return json;
-}
-
-void Reading::publish(PicoMQTT::Publisher & mqtt, bool force) const {
-    if (!(publish_pending || force)) {
-        return;
+    json["name"] = name.length() ? name.c_str() : (char *) 0;
+    if (readings) {
+        json["temperature"] = readings->temperature;
+        json["humidity"] = readings->humidity;
+        json["battery"]["percentage"] = readings->battery_level;
+        json["battery"]["voltage"] = readings->battery_voltage;
+        json["last_update"] = readings->last_update.elapsed();
     }
-
-    static const String topic_prefix = "celsius/" + get_board_id() + "/";
-    const String topic = topic_prefix + address;
-    const auto json = get_json();
-
-    auto publish = mqtt.begin_publish(topic, measureJson(json));
-    serializeJson(json, publish);
-    publish.send();
-
-    Serial.print("Publishing readings: ");
-    serializeJson(json, Serial);
-    Serial.print("\n");
-
-    publish_pending = false;
+    json["last_seen"] = last_seen.elapsed();
+    return json;
 }

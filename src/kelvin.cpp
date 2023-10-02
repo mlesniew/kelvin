@@ -30,7 +30,7 @@ PicoUtils::RestfulServer<WebServer> server;
 PicoMQTT::Client mqtt;
 PicoSyslog::Logger syslog("kelvin");
 
-std::map<BLEAddress, Reading> readings;
+std::map<BLEAddress, BluetoothDevice> devices;
 
 bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
@@ -52,13 +52,13 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
                 return;
             }
 
-            auto emplace_result = readings.emplace(address, address);
-            auto & reading = emplace_result.first->second;
+            auto emplace_result = devices.emplace(address, address);
+            auto & device = emplace_result.first->second;
             const bool is_new_element = emplace_result.second;
 
-            reading.update(advertisedDevice);
+            device.update(advertisedDevice);
 
-            active_scan_required = active_scan_required || (is_new_element && !reading.has_name());
+            active_scan_required = active_scan_required || (is_new_element && !device.name.length());
         }
 } scan_callbacks;
 
@@ -197,10 +197,13 @@ void setup() {
 
         DynamicJsonDocument json(2048);
 
-        for (const auto & kv : readings) {
+        for (const auto & kv : devices) {
             auto address = kv.first;
-            const auto & reading = kv.second;
-            json[address.toString()] = reading.get_json();
+            const auto & device = kv.second;
+            if (!device.get_readings()) {
+                continue;
+            }
+            json[address.toString()] = device.get_json();
         }
 
         server.sendJson(json);
@@ -227,16 +230,43 @@ void setup() {
 void publish_readings() {
     std::lock_guard<std::mutex> guard(mutex);
 
+    static PicoUtils::Stopwatch last_publish;
+
     bool got_all_names = true;
 
-    for (const auto & kv : readings) {
-        const auto & reading = kv.second;
-        if (reading.has_name()) {
-            reading.publish(mqtt);
-        } else {
+    for (const auto & kv : devices) {
+        const auto & device = kv.second;
+
+        // don't publish readings of unnamed devices
+        if (!device.name.length()) {
             got_all_names = false;
+            continue;
         }
+
+        const auto * readings = device.get_readings();
+        if (!readings) {
+            continue;
+        }
+
+        if (readings->last_update.elapsed() > last_publish.elapsed()) {
+            // already published
+            continue;
+        }
+
+        static const String topic_prefix = "celsius/" + get_board_id() + "/";
+        const String topic = topic_prefix + device.address;
+        const auto json = device.get_json();
+
+        auto publish = mqtt.begin_publish(topic, measureJson(json));
+        serializeJson(json, publish);
+        publish.send();
+
+        Serial.print("Publishing readings: ");
+        serializeJson(json, Serial);
+        Serial.print("\n");
     }
+
+    last_publish.reset();
 
     if (active_scan_enabled && (got_all_names || (active_scan_stopwatch.elapsed() >= 10))) {
         syslog.println(F("Disabling active scan."));
