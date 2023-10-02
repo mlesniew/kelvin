@@ -257,19 +257,17 @@ void publish_readings() {
 void update_status_led() {
     static bool wifi_was_connected = false;
     if (WiFi.status() == WL_CONNECTED) {
+        if (mqtt.connected()) {
+            led_blinker.set_pattern(uint64_t(0b101) << 60);
+        } else {
+            led_blinker.set_pattern(uint64_t(0b1) << 60);
+        }
         if (!wifi_was_connected) {
             syslog.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
         }
-        if (mqtt.connected()) {
-            led_blinker.set_pattern(uint64_t(0b1) << 60);
-        }
         wifi_was_connected = true;
     } else {
-        if (wifi_was_connected) {
-            syslog.println("WiFi connection lost.");
-        }
         led_blinker.set_pattern(0b1100);
-        wifi_was_connected = false;
     }
     led_blinker.tick();
 };
