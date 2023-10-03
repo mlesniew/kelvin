@@ -2,8 +2,9 @@
 
 #include <memory>
 
-#include <PicoUtils.h>
 #include <ArduinoJson.h>
+#include <PicoPrometheus.h>
+#include <PicoUtils.h>
 
 class BLEAddress;
 class BLEAdvertisedDevice;

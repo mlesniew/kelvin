@@ -1,8 +1,12 @@
 #include <BLEDevice.h>
 #include <BLEScan.h>
 
+#include <PicoSyslog.h>
+
 #include "globals.h"
 #include "reading.h"
+
+extern PicoSyslog::SimpleLogger syslog;
 
 namespace Metrics {
 PicoPrometheus::Gauge temperature(prometheus, "air_temperature", "Air temperature in degrees Celsius");
@@ -29,7 +33,8 @@ Readings::~Readings() {
     Metrics::battery_voltage.remove(labels);
 }
 
-BluetoothDevice::BluetoothDevice(/* const */ BLEAddress & address) : address(address.toString().c_str()) {}
+BluetoothDevice::BluetoothDevice(/* const */ BLEAddress & address) : address(address.toString().c_str()) {
+}
 
 PicoPrometheus::Labels BluetoothDevice::get_labels() const {
     return {{"name", name.c_str()}, {"address", address.c_str()}};
@@ -43,6 +48,7 @@ void BluetoothDevice::update(BLEAdvertisedDevice & device) {
             return;
         }
         name = device.getName().c_str();
+        syslog.printf("New device detected: %s (%s)\n", this->address.c_str(), name.c_str());
     }
 
     for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
@@ -80,6 +86,7 @@ void BluetoothDevice::update(BLEAdvertisedDevice & device) {
 
         const bool first_reading = !readings;
         if (first_reading) {
+            syslog.printf("First readings for %s (%s) received.\n", address.c_str(), name.c_str());
             readings.reset(new Readings(*this));
         }
 

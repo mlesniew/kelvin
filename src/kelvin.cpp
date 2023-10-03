@@ -18,6 +18,7 @@
 
 #include "globals.h"
 #include "reading.h"
+#include "hass.h"
 
 PicoUtils::PinInput<0, true> button;
 PicoUtils::PinOutput<2, false> wifi_led;
@@ -69,7 +70,7 @@ namespace network_config {
 const char CONFIG_PATH[] PROGMEM = "/network.json";
 
 void load() {
-    PicoUtils::JsonConfigFile<StaticJsonDocument<256>> config(SPIFFS, FPSTR(CONFIG_PATH));
+    PicoUtils::JsonConfigFile<StaticJsonDocument<512>> config(SPIFFS, FPSTR(CONFIG_PATH));
     const String default_hostname = "kelvin-" + get_board_id();
     hostname = config["hostname"] | default_hostname;
     mqtt.host = config["mqtt"]["server"] | "calor.local";
@@ -79,12 +80,16 @@ void load() {
     syslog.server = config["syslog"] | "192.168.1.100";
     syslog.host = hostname;
     ota_password = config["ota_password"] | "";
+    HomeAssistant::mqtt.host = config["hass"]["server"] | "";
+    HomeAssistant::mqtt.port = config["hass"]["port"] | 1883;
+    HomeAssistant::mqtt.username = config["hass"]["username"] | "";
+    HomeAssistant::mqtt.password = config["hass"]["password"] | "";
 }
 
 void save() {
     auto file = SPIFFS.open(FPSTR(CONFIG_PATH), "w");
     if (file) {
-        StaticJsonDocument<256> config;
+        StaticJsonDocument<512> config;
         config["hostname"] = hostname;
         config["mqtt"]["host"] = mqtt.host;
         config["mqtt"]["port"] = mqtt.port;
@@ -92,6 +97,10 @@ void save() {
         config["mqtt"]["password"] = mqtt.password;
         config["syslog"] = syslog.server;
         config["ota_password"] = ota_password;
+        config["hass"]["server"] = HomeAssistant::mqtt.host;
+        config["hass"]["port"] = HomeAssistant::mqtt.port;
+        config["hass"]["username"] = HomeAssistant::mqtt.username;
+        config["hass"]["password"] = HomeAssistant::mqtt.password;
         serializeJson(config, file);
         file.close();
     }
@@ -230,6 +239,8 @@ void setup() {
     server.begin();
     mqtt.begin();
 
+    HomeAssistant::init();
+
     {
         ArduinoOTA.setHostname(hostname.c_str());
         if (ota_password.length()) {
@@ -242,7 +253,6 @@ void setup() {
 }
 
 void publish_readings() {
-    std::lock_guard<std::mutex> guard(mutex);
 
     static PicoUtils::Stopwatch last_publish;
 
@@ -333,5 +343,10 @@ void loop() {
     server.handleClient();
     mqtt.loop();
     check_mqtt();
-    publish_readings();
+
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        publish_readings();
+        HomeAssistant::tick();
+    }
 }
