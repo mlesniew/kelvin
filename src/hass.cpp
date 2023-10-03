@@ -71,7 +71,7 @@ void autodiscovery(const BluetoothDevice & device) {
 void autodiscovery() {
     for (const auto & kv : devices) {
         const auto & device = kv.second;
-        if (device.get_readings()) {
+        if (device.name.length()) {
             autodiscovery(device);
         }
     }
@@ -118,10 +118,12 @@ void tick() {
         if (readings->last_update.elapsed() > last_update.elapsed()) {
             continue;
         }
-        if (!discovered_devices.count(device.address)) {
+
+        if (device.name.length() && !discovered_devices.count(device.address)) {
             autodiscovery(device);
             discovered_devices.insert(device.address);
         }
+
         mqtt.publish("celsius/" + get_board_id() + "/" + device.address + "/temperature", String(readings->temperature));
         mqtt.publish("celsius/" + get_board_id() + "/" + device.address + "/humidity", String(readings->humidity));
         mqtt.publish("celsius/" + get_board_id() + "/" + device.address + "/battery_level", String(readings->battery_level));

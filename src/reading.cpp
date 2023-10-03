@@ -37,18 +37,15 @@ BluetoothDevice::BluetoothDevice(/* const */ BLEAddress & address) : address(add
 }
 
 PicoPrometheus::Labels BluetoothDevice::get_labels() const {
-    return {{"name", name.c_str()}, {"address", address.c_str()}};
+    return {{"address", address.c_str()}};
 };
 
 void BluetoothDevice::update(BLEAdvertisedDevice & device) {
     last_seen.reset();
 
-    if (name.length() == 0) {
-        if (!device.haveName()) {
-            return;
-        }
+    if (device.haveName() && (name != device.getName().c_str())) {
         name = device.getName().c_str();
-        syslog.printf("New device detected: %s (%s)\n", this->address.c_str(), name.c_str());
+        syslog.printf("Device name assigned %s: %s\n", this->address.c_str(), name.c_str());
     }
 
     for (int i = 0; i < device.getServiceDataUUIDCount(); ++i) {
@@ -86,7 +83,7 @@ void BluetoothDevice::update(BLEAdvertisedDevice & device) {
 
         const bool first_reading = !readings;
         if (first_reading) {
-            syslog.printf("First readings for %s (%s) received.\n", address.c_str(), name.c_str());
+            syslog.printf("First readings for %s (%s) received.\n", address.c_str(), name.length() ? name.c_str() : "<unnamed>");
             readings.reset(new Readings(*this));
         }
 

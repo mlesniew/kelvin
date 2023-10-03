@@ -261,10 +261,8 @@ void publish_readings() {
     for (const auto & kv : devices) {
         const auto & device = kv.second;
 
-        // don't publish readings of unnamed devices
         if (!device.name.length()) {
             got_all_names = false;
-            continue;
         }
 
         const auto * readings = device.get_readings();
