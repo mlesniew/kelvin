@@ -268,7 +268,7 @@ void publish_readings() {
 
     last_publish.reset();
 
-    if (active_scan_enabled && (got_all_names || (active_scan_stopwatch.elapsed() >= 10))) {
+    if (active_scan_enabled && (got_all_names || (active_scan_stopwatch.elapsed() >= 3 * 60))) {
         syslog.println(F("Disabling active scan."));
         active_scan_enabled = false;
         restart_scan();
