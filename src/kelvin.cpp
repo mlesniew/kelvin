@@ -209,6 +209,20 @@ void setup() {
         server.sendJson(json);
     });
 
+    server.on("/devices", HTTP_GET, [] {
+        std::lock_guard<std::mutex> guard(mutex);
+
+        DynamicJsonDocument json(2048);
+
+        for (const auto & kv : devices) {
+            auto address = kv.first;
+            const auto & device = kv.second;
+            json[address.toString()] = device.name.length() ? device.name.c_str() : (char *) 0;
+        }
+
+        server.sendJson(json);
+    });
+
     prometheus.labels["module"] = "kelvin";
     prometheus.labels["board"] = get_board_id();
 
