@@ -17,10 +17,13 @@ extern String hostname;
 namespace {
 
 void autodiscovery(const BluetoothDevice & device) {
+    if (!HomeAssistant::autodiscovery_topic.length())
+        return;
+
     syslog.printf("Sending Home Assistant autodiscovery for device %s (%s).\n",
                   device.address.c_str(), device.name.c_str());
 
-    const String board_unique_id = "kelvin-" + get_board_id();
+    const String board_unique_id = "kelvin_" + get_board_id();
 
     struct Entity {
         const char * name;
@@ -39,18 +42,21 @@ void autodiscovery(const BluetoothDevice & device) {
     };
 
     for (const auto & entity : entities) {
-        auto unique_id = board_unique_id + "-" + device.address + "-" + entity.name;
-        unique_id.replace(":", "");
+        String dev_addr_without_colons = device.address;
+        dev_addr_without_colons.replace(":", "");
 
-        const String topic = "homeassistant/sensor/" + unique_id + "/config";
+        auto unique_id = board_unique_id + "_" + dev_addr_without_colons + "_" + entity.name;
+
+        const String topic = HomeAssistant::autodiscovery_topic + "/sensor/" + unique_id + "/config";
 
         StaticJsonDocument<1024> json;
         json["unique_id"] = unique_id;
-        json["name"] = entity.friendly_name;
+        json["object_id"] = hostname + "_" + device.name + "_" + entity.name;
+        json["name"] = device.name + " " + entity.friendly_name;
         json["device_class"] = entity.device_class;
         json["expire_after"] = 60 * 3;
         json["suggested_display_precision"] = entity.precission;
-        json["state_topic"] = "celsius/" + get_board_id() + "/" + device.address + "/" + entity.name;
+        json["state_topic"] = "kelvin/" + get_board_id() + "/" + dev_addr_without_colons + "/" + entity.name;
         json["unit_of_measurement"] = entity.unit;
         if (entity.diagnostic) {
             json["entity_category"] = "diagnostic";
@@ -58,8 +64,9 @@ void autodiscovery(const BluetoothDevice & device) {
 
         auto dev = json["device"];
         dev["name"] = "Sensor " + device.name + " (via " + hostname + ")";
-        dev["identifiers"][0] = board_unique_id + "-" + device.address;
-        dev["identifiers"][0] = board_unique_id + "-" + device.address;
+        dev["identifiers"][0] = board_unique_id + "_" + dev_addr_without_colons;
+        dev["connections"][0][0] = "mac";
+        dev["connections"][0][1] = device.address.c_str();
         dev["via_device"] = board_unique_id;
 
         auto publish = HomeAssistant::mqtt.begin_publish(topic, measureJson(json), 0, true);
@@ -82,6 +89,7 @@ void autodiscovery() {
 namespace HomeAssistant {
 
 PicoMQTT::Client mqtt;
+String autodiscovery_topic;
 
 void init() {
     mqtt.client_id = "kelvin-" + get_board_id();
@@ -124,11 +132,13 @@ void tick() {
             discovered_devices.insert(device.address);
         }
 
-        mqtt.publish("celsius/" + get_board_id() + "/" + device.address + "/temperature", String(readings->temperature));
-        mqtt.publish("celsius/" + get_board_id() + "/" + device.address + "/humidity", String(readings->humidity));
-        mqtt.publish("celsius/" + get_board_id() + "/" + device.address + "/battery_level", String(readings->battery_level));
-        mqtt.publish("celsius/" + get_board_id() + "/" + device.address + "/battery_voltage",
-                     String(readings->battery_voltage));
+        String dev_addr = device.address;
+        dev_addr.replace(":", "");
+
+        mqtt.publish("kelvin/" + get_board_id() + "/" + dev_addr + "/temperature", String(readings->temperature));
+        mqtt.publish("kelvin/" + get_board_id() + "/" + dev_addr + "/humidity", String(readings->humidity));
+        mqtt.publish("kelvin/" + get_board_id() + "/" + dev_addr + "/battery_level", String(readings->battery_level));
+        mqtt.publish("kelvin/" + get_board_id() + "/" + dev_addr + "/battery_voltage", String(readings->battery_voltage));
     }
 
     last_update.reset();

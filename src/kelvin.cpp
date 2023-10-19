@@ -71,7 +71,7 @@ const char CONFIG_PATH[] PROGMEM = "/network.json";
 
 void load() {
     PicoUtils::JsonConfigFile<StaticJsonDocument<512>> config(SPIFFS, FPSTR(CONFIG_PATH));
-    const String default_hostname = "kelvin-" + get_board_id();
+    const String default_hostname = "kelvin_" + get_board_id();
     hostname = config["hostname"] | default_hostname;
     mqtt.host = config["mqtt"]["server"] | "calor.local";
     mqtt.port = config["mqtt"]["port"] | 1883;
@@ -84,6 +84,7 @@ void load() {
     HomeAssistant::mqtt.port = config["hass"]["port"] | 1883;
     HomeAssistant::mqtt.username = config["hass"]["username"] | "";
     HomeAssistant::mqtt.password = config["hass"]["password"] | "";
+    HomeAssistant::autodiscovery_topic = config["hass"]["autodiscovery_topic"] | "homeassistant";
 }
 
 void save() {
