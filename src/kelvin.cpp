@@ -20,8 +20,8 @@
 #include "reading.h"
 #include "hass.h"
 
-PicoUtils::PinInput<0, true> button;
-PicoUtils::PinOutput<2, false> wifi_led;
+PicoUtils::PinInput button(0, true);
+PicoUtils::PinOutput wifi_led(2, false);
 PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
 String hostname;
