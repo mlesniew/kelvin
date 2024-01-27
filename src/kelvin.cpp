@@ -10,7 +10,7 @@
 #include <uri/UriRegex.h>
 
 #include <ArduinoJson.h>
-#include <PicoMQTT.h>
+#include <PicoMQ.h>
 #include <PicoPrometheus.h>
 #include <PicoSyslog.h>
 #include <PicoUtils.h>
@@ -28,7 +28,7 @@ String hostname;
 String ota_password;
 
 PicoUtils::RestfulServer<WebServer> server;
-PicoMQTT::Client mqtt;
+PicoMQ picomq;
 PicoSyslog::Logger syslog("kelvin");
 
 std::map<BLEAddress, BluetoothDevice> devices;
@@ -73,10 +73,6 @@ void load() {
     PicoUtils::JsonConfigFile<StaticJsonDocument<512>> config(SPIFFS, FPSTR(CONFIG_PATH));
     const String default_hostname = "kelvin_" + get_board_id();
     hostname = config["hostname"] | default_hostname;
-    mqtt.host = config["mqtt"]["server"] | "calor.local";
-    mqtt.port = config["mqtt"]["port"] | 1883;
-    mqtt.username = config["mqtt"]["username"] | "kelvin";
-    mqtt.password = config["mqtt"]["password"] | "harara";
     syslog.server = config["syslog"] | "192.168.1.100";
     syslog.host = hostname;
     ota_password = config["ota_password"] | "";
@@ -92,10 +88,6 @@ void save() {
     if (file) {
         StaticJsonDocument<512> config;
         config["hostname"] = hostname;
-        config["mqtt"]["host"] = mqtt.host;
-        config["mqtt"]["port"] = mqtt.port;
-        config["mqtt"]["username"] = mqtt.username;
-        config["mqtt"]["password"] = mqtt.password;
         config["syslog"] = syslog.server;
         config["ota_password"] = ota_password;
         config["hass"]["server"] = HomeAssistant::mqtt.host;
@@ -113,20 +105,12 @@ void config_mode() {
     led_blinker.set_pattern(0b100100100 << 9);
 
     WiFiManagerParameter param_hostname("hostname", "Hostname", hostname.c_str(), 64);
-    WiFiManagerParameter param_mqtt_server("mqtt_server", "MQTT Server", mqtt.host.c_str(), 64);
-    WiFiManagerParameter param_mqtt_port("mqtt_port", "MQTT Port", String(mqtt.port).c_str(), 64);
-    WiFiManagerParameter param_mqtt_username("mqtt_user", "MQTT Username", mqtt.username.c_str(), 64);
-    WiFiManagerParameter param_mqtt_password("mqtt_pass", "MQTT Password", mqtt.password.c_str(), 64);
     WiFiManagerParameter param_syslog("syslog", "Syslog server", syslog.server.c_str(), 64);
     WiFiManagerParameter param_ota_password("ota_password", "OTA password", ota_password.c_str(), 64);
 
     WiFiManager wifi_manager;
 
     wifi_manager.addParameter(&param_hostname);
-    wifi_manager.addParameter(&param_mqtt_server);
-    wifi_manager.addParameter(&param_mqtt_port);
-    wifi_manager.addParameter(&param_mqtt_username);
-    wifi_manager.addParameter(&param_mqtt_password);
     wifi_manager.addParameter(&param_syslog);
     wifi_manager.addParameter(&param_ota_password);
 
@@ -135,10 +119,6 @@ void config_mode() {
     hostname = param_hostname.getValue();
 
     hostname = param_hostname.getValue();
-    mqtt.host = param_mqtt_server.getValue();
-    mqtt.port = String(param_mqtt_port.getValue()).toInt();
-    mqtt.username = param_mqtt_username.getValue();
-    mqtt.password = param_mqtt_password.getValue();
     syslog.server = param_syslog.getValue();
     ota_password = param_ota_password.getValue();
 
@@ -238,7 +218,7 @@ void setup() {
 
     prometheus.register_metrics_endpoint(server);
     server.begin();
-    mqtt.begin();
+    picomq.begin();
 
     HomeAssistant::init();
 
@@ -280,7 +260,7 @@ void publish_readings() {
         const String topic = topic_prefix + device.address;
         const auto json = device.get_json();
 
-        auto publish = mqtt.begin_publish(topic, measureJson(json));
+        auto publish = picomq.begin_publish(topic);
         serializeJson(json, publish);
         publish.send();
 
@@ -310,9 +290,7 @@ void publish_readings() {
 void update_status_led() {
     static bool wifi_was_connected = false;
     if (WiFi.status() == WL_CONNECTED) {
-        if (mqtt.connected()) {
-            led_blinker.set_pattern(uint64_t(0b101) << 60);
-        } else {
+        {
             led_blinker.set_pattern(uint64_t(0b1) << 60);
         }
         if (!wifi_was_connected) {
@@ -325,23 +303,12 @@ void update_status_led() {
     led_blinker.tick();
 };
 
-void check_mqtt() {
-    static PicoUtils::Stopwatch connection_loss_time;
-    if (mqtt.connected()) {
-        connection_loss_time.reset();
-    } else if (connection_loss_time.elapsed() >= 10 * 60) {
-        syslog.println("Couldn't establish MQTT connection for too long.  Rebooting...");
-        ESP.restart();
-    }
-}
-
 void loop() {
     ArduinoOTA.handle();
 
     update_status_led();
     server.handleClient();
-    mqtt.loop();
-    check_mqtt();
+    picomq.loop();
 
     {
         std::lock_guard<std::mutex> guard(mutex);
