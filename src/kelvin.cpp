@@ -234,7 +234,6 @@ void setup() {
 }
 
 void publish_readings() {
-
     static PicoUtils::Stopwatch last_publish;
 
     bool got_all_names = true;
@@ -258,14 +257,15 @@ void publish_readings() {
 
         static const String topic_prefix = "celsius/" + get_board_id() + "/";
         const String topic = topic_prefix + device.address;
-        const auto json = device.get_json();
 
-        auto publish = picomq.begin_publish(topic);
-        serializeJson(json, publish);
-        publish.send();
+        if (device.name.length()) {
+            picomq.publish(topic_prefix + device.name + "/temperature", readings->temperature);
+            picomq.publish(topic_prefix + device.name + "/humidity", readings->humidity);
+        }
 
-        Serial.print("Publishing readings: ");
-        serializeJson(json, Serial);
+        picomq.publish(topic_prefix + device.address + "/temperature", readings->temperature);
+        picomq.publish(topic_prefix + device.address + "/humidity", readings->humidity);
+
         Serial.print("\n");
     }
 
