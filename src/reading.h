@@ -37,7 +37,7 @@ class BluetoothDevice {
 
         void update(BLEAdvertisedDevice & device);
         PicoPrometheus::Labels get_labels() const;
-        DynamicJsonDocument get_json() const;
+        JsonDocument get_json() const;
 
         const Readings * get_readings() const { return readings.get(); }
 

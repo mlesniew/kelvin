@@ -70,7 +70,7 @@ namespace network_config {
 const char CONFIG_PATH[] PROGMEM = "/network.json";
 
 void load() {
-    PicoUtils::JsonConfigFile<StaticJsonDocument<512>> config(SPIFFS, FPSTR(CONFIG_PATH));
+    PicoUtils::JsonConfigFile<JsonDocument> config(SPIFFS, FPSTR(CONFIG_PATH));
     const String default_hostname = "kelvin_" + get_board_id();
     hostname = config["hostname"] | default_hostname;
     syslog.server = config["syslog"] | "192.168.1.100";
@@ -86,7 +86,7 @@ void load() {
 void save() {
     auto file = SPIFFS.open(FPSTR(CONFIG_PATH), "w");
     if (file) {
-        StaticJsonDocument<512> config;
+        JsonDocument config;
         config["hostname"] = hostname;
         config["syslog"] = syslog.server;
         config["ota_password"] = ota_password;
@@ -185,7 +185,7 @@ void setup() {
     server.on("/readings", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
 
-        DynamicJsonDocument json(2048);
+        JsonDocument json;
 
         for (const auto & kv : devices) {
             auto address = kv.first;
@@ -202,7 +202,7 @@ void setup() {
     server.on("/devices", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
 
-        DynamicJsonDocument json(2048);
+        JsonDocument json;
 
         for (const auto & kv : devices) {
             auto address = kv.first;

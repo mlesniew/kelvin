@@ -46,7 +46,7 @@ void autodiscovery(const BluetoothDevice & device) {
 
         const String topic = HomeAssistant::autodiscovery_topic + "/sensor/" + unique_id + "/config";
 
-        StaticJsonDocument<1024> json;
+        JsonDocument json;
         json["unique_id"] = unique_id;
         json["object_id"] = "kelvin_" + device.name + "_" + entity.name;
         json["name"] = entity.friendly_name;

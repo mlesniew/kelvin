@@ -101,8 +101,8 @@ void BluetoothDevice::update(BLEAdvertisedDevice & device) {
     }
 }
 
-DynamicJsonDocument BluetoothDevice::get_json() const {
-    DynamicJsonDocument json(256);
+JsonDocument BluetoothDevice::get_json() const {
+    JsonDocument json;
     json["name"] = name.length() ? name.c_str() : (char *) 0;
     if (readings) {
         json["temperature"] = readings->temperature;
