@@ -303,6 +303,17 @@ void update_status_led() {
     led_blinker.tick();
 };
 
+void no_wifi_reset() {
+    static PicoUtils::Stopwatch stopwatch;
+
+    if (WiFi.status() == WL_CONNECTED) {
+        stopwatch.reset();
+    } else if (stopwatch.elapsed() >= 5 * 60) {
+        syslog.printf("No WiFi connection for too long.  Resetting...");
+        ESP.restart();
+    }
+}
+
 void loop() {
     ArduinoOTA.handle();
 
@@ -315,4 +326,6 @@ void loop() {
         publish_readings();
         HomeAssistant::tick();
     }
+
+    no_wifi_reset();
 }
