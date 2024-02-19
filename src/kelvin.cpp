@@ -11,6 +11,7 @@
 
 #include <ArduinoJson.h>
 #include <PicoMQ.h>
+#include <PicoMQTT.h>
 #include <PicoPrometheus.h>
 #include <PicoSyslog.h>
 #include <PicoUtils.h>
@@ -29,12 +30,14 @@ String ota_password;
 
 PicoUtils::RestfulServer<WebServer> server;
 PicoMQ picomq;
+PicoMQTT::Client mqtt;
 PicoSyslog::Logger syslog("kelvin");
 
 std::map<BLEAddress, BluetoothDevice> devices;
 
 bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
+PicoUtils::Stopwatch last_mqtt_reconnect;
 
 namespace Metrics {
 PicoPrometheus::Gauge free_heap(prometheus, "esp_free_heap", "Free heap memory in bytes", [] { return ESP.getFreeHeap(); });
@@ -73,6 +76,10 @@ void load() {
     PicoUtils::JsonConfigFile<JsonDocument> config(SPIFFS, FPSTR(CONFIG_PATH));
     const String default_hostname = "kelvin_" + get_board_id();
     hostname = config["hostname"] | default_hostname;
+    mqtt.host = config["mqtt"]["server"] | "calor.local";
+    mqtt.port = config["mqtt"]["port"] | 1883;
+    mqtt.username = config["mqtt"]["username"] | "kelvin";
+    mqtt.password = config["mqtt"]["password"] | "harara";
     syslog.server = config["syslog"] | "192.168.1.100";
     syslog.host = hostname;
     ota_password = config["ota_password"] | "";
@@ -88,6 +95,10 @@ void save() {
     if (file) {
         JsonDocument config;
         config["hostname"] = hostname;
+        config["mqtt"]["host"] = mqtt.host;
+        config["mqtt"]["port"] = mqtt.port;
+        config["mqtt"]["username"] = mqtt.username;
+        config["mqtt"]["password"] = mqtt.password;
         config["syslog"] = syslog.server;
         config["ota_password"] = ota_password;
         config["hass"]["server"] = HomeAssistant::mqtt.host;
@@ -216,9 +227,15 @@ void setup() {
     prometheus.labels["module"] = "kelvin";
     prometheus.labels["board"] = get_board_id();
 
+    mqtt.connected_callback = [] {
+        syslog.println("MQTT connected, publishing readings...");
+        last_mqtt_reconnect.reset();
+    };
+
     prometheus.register_metrics_endpoint(server);
     server.begin();
     picomq.begin();
+    mqtt.begin();
 
     HomeAssistant::init();
 
@@ -238,6 +255,8 @@ void publish_readings() {
 
     bool got_all_names = true;
 
+    const bool just_reconnected = last_publish.elapsed() >= last_mqtt_reconnect.elapsed();
+
     for (const auto & kv : devices) {
         const auto & device = kv.second;
 
@@ -250,8 +269,11 @@ void publish_readings() {
             continue;
         }
 
-        if (readings->last_update.elapsed() > last_publish.elapsed()) {
-            // already published
+        const bool already_published = (readings->last_update.elapsed() > last_publish.elapsed());
+        const bool recent = (readings->last_update.elapsed() <= 120);
+
+        if (already_published && !(recent && just_reconnected)) {
+            // already published and we haven't just reconnected
             continue;
         }
 
@@ -261,6 +283,7 @@ void publish_readings() {
         if (device.name.length()) {
             picomq.publish(topic_prefix + device.name + "/temperature", readings->temperature);
             picomq.publish(topic_prefix + device.name + "/humidity", readings->humidity);
+            mqtt.publish(topic_prefix + device.name + "/temperature", String(readings->temperature));
         }
 
         picomq.publish(topic_prefix + device.address + "/temperature", readings->temperature);
@@ -320,6 +343,7 @@ void loop() {
     update_status_led();
     server.handleClient();
     picomq.loop();
+    mqtt.loop();
 
     {
         std::lock_guard<std::mutex> guard(mutex);
