@@ -10,5 +10,6 @@ extern String autodiscovery_topic;
 
 void init();
 void tick();
+bool connected();
 
 }

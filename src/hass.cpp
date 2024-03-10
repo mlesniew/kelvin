@@ -143,4 +143,8 @@ void tick() {
     last_update.reset();
 }
 
+bool connected() {
+    return mqtt.connected();
+}
+
 }

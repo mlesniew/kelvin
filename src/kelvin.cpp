@@ -23,7 +23,6 @@
 
 PicoUtils::PinInput button(0, true);
 PicoUtils::PinOutput wifi_led(2, false);
-PicoUtils::Blink led_blinker(wifi_led, 0, 91);
 
 String hostname;
 String ota_password;
@@ -38,6 +37,7 @@ std::map<BLEAddress, BluetoothDevice> devices;
 bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
 PicoUtils::Stopwatch last_mqtt_reconnect;
+PicoUtils::WiFiControlSmartConfig wifi_control(wifi_led);
 
 namespace Metrics {
 PicoPrometheus::Gauge free_heap(prometheus, "esp_free_heap", "Free heap memory in bytes", [] { return ESP.getFreeHeap(); });
@@ -112,30 +112,6 @@ void save() {
 
 }
 
-void config_mode() {
-    led_blinker.set_pattern(0b100100100 << 9);
-
-    WiFiManagerParameter param_hostname("hostname", "Hostname", hostname.c_str(), 64);
-    WiFiManagerParameter param_syslog("syslog", "Syslog server", syslog.server.c_str(), 64);
-    WiFiManagerParameter param_ota_password("ota_password", "OTA password", ota_password.c_str(), 64);
-
-    WiFiManager wifi_manager;
-
-    wifi_manager.addParameter(&param_hostname);
-    wifi_manager.addParameter(&param_syslog);
-    wifi_manager.addParameter(&param_ota_password);
-
-    wifi_manager.startConfigPortal("Kelvin");
-
-    hostname = param_hostname.getValue();
-
-    hostname = param_hostname.getValue();
-    syslog.server = param_syslog.getValue();
-    ota_password = param_ota_password.getValue();
-
-    network_config::save();
-}
-
 void restart_scan() {
     auto & scan = *BLEDevice::getScan();
     scan.stop();
@@ -155,9 +131,6 @@ void restart_scan() {
 
 void setup() {
     wifi_led.init();
-    led_blinker.set_pattern(0b10);
-    PicoUtils::BackgroundBlinker bb(led_blinker);
-
     button.init();
 
     Serial.begin(115200);
@@ -176,16 +149,8 @@ void setup() {
                      "Press and hold button now to enter WiFi setup.\n"
                     ));
 
-    delay(3000);
-
-    if (button) {
-        config_mode();
-    }
-
     WiFi.hostname(hostname);
-    WiFi.setAutoReconnect(true);
-    WiFi.softAPdisconnect(true);
-    WiFi.begin();
+    wifi_control.init(button);
 
     {
         BLEDevice::init("");
@@ -247,7 +212,12 @@ void setup() {
         ArduinoOTA.begin();
     }
 
-    led_blinker.set_pattern(1);
+    wifi_control.get_connectivity_level = []{
+        unsigned int ret = 1;
+        if (mqtt.connected()) ++ret;
+        if (HomeAssistant::connected()) ++ret;
+        return ret;
+    };
 }
 
 void publish_readings() {
@@ -310,22 +280,6 @@ void publish_readings() {
     ScanCallbacks::active_scan_required = false;
 }
 
-void update_status_led() {
-    static bool wifi_was_connected = false;
-    if (WiFi.status() == WL_CONNECTED) {
-        {
-            led_blinker.set_pattern(uint64_t(0b1) << 60);
-        }
-        if (!wifi_was_connected) {
-            syslog.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
-        }
-        wifi_was_connected = true;
-    } else {
-        led_blinker.set_pattern(0b1100);
-    }
-    led_blinker.tick();
-};
-
 void no_wifi_reset() {
     static PicoUtils::Stopwatch stopwatch;
 
@@ -340,10 +294,10 @@ void no_wifi_reset() {
 void loop() {
     ArduinoOTA.handle();
 
-    update_status_led();
     server.handleClient();
     picomq.loop();
     mqtt.loop();
+    wifi_control.tick();
 
     {
         std::lock_guard<std::mutex> guard(mutex);
