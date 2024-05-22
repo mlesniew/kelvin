@@ -258,8 +258,6 @@ void publish_readings() {
 
         picomq.publish(topic_prefix + device.address + "/temperature", readings->temperature);
         picomq.publish(topic_prefix + device.address + "/humidity", readings->humidity);
-
-        Serial.print("\n");
     }
 
     last_publish.reset();
