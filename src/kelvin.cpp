@@ -281,10 +281,10 @@ void publish_readings() {
 void no_wifi_reset() {
     static PicoUtils::Stopwatch stopwatch;
 
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED && (mqtt.host.isEmpty() || mqtt.connected())) {
         stopwatch.reset();
     } else if (stopwatch.elapsed() >= 5 * 60) {
-        syslog.printf("No WiFi connection for too long.  Resetting...");
+        syslog.printf("No WiFi or MQTT connection for too long.  Resetting...");
         ESP.restart();
     }
 }
