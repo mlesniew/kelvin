@@ -8,37 +8,14 @@
 
 extern PicoSyslog::SimpleLogger syslog;
 
-namespace Metrics {
-PicoPrometheus::Gauge temperature(prometheus, "air_temperature", "Air temperature in degrees Celsius");
-PicoPrometheus::Gauge humidity(prometheus, "air_humidity", "Relative air humidity in percent");
-PicoPrometheus::Gauge battery_level(prometheus, "battery_level", "Battery level in percent");
-PicoPrometheus::Gauge battery_voltage(prometheus, "battery_voltage", "Battery voltage in volts");
-PicoPrometheus::Histogram update_interval(prometheus, "update_interval", "Sensor beacon interval in seconds",
-{1, 5, 10, 15, 30, 45, 60, 90, 120, 300});
-}
-
 Readings::Readings(const BluetoothDevice & sensor): sensor(sensor) {
-    const auto labels = sensor.get_labels();
-    Metrics::temperature[labels].bind(temperature);
-    Metrics::humidity[labels].bind(humidity);
-    Metrics::battery_level[labels].bind(battery_level);
-    Metrics::battery_voltage[labels].bind(battery_voltage);
 }
 
 Readings::~Readings() {
-    const auto labels = sensor.get_labels();
-    Metrics::temperature.remove(labels);
-    Metrics::humidity.remove(labels);
-    Metrics::battery_level.remove(labels);
-    Metrics::battery_voltage.remove(labels);
 }
 
 BluetoothDevice::BluetoothDevice(/* const */ BLEAddress & address) : address(address.toString().c_str()) {
 }
-
-PicoPrometheus::Labels BluetoothDevice::get_labels() const {
-    return {{"address", address.c_str()}};
-};
 
 void BluetoothDevice::update(BLEAdvertisedDevice & device) {
     last_seen.reset();
@@ -92,9 +69,6 @@ void BluetoothDevice::update(BLEAdvertisedDevice & device) {
         readings->battery_level = data.battery_level;
         readings->battery_voltage = 0.001 * (double) data.battery_mv;
 
-        if (!first_reading) {
-            Metrics::update_interval[get_labels()].observe(double(readings->last_update.elapsed()));
-        }
         readings->last_update.reset();
 
         break;

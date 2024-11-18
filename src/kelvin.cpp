@@ -12,7 +12,6 @@
 #include <ArduinoJson.h>
 #include <PicoMQ.h>
 #include <PicoMQTT.h>
-#include <PicoPrometheus.h>
 #include <PicoSyslog.h>
 #include <PicoUtils.h>
 #include <WiFiManager.h>
@@ -38,10 +37,6 @@ bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
 PicoUtils::Stopwatch last_mqtt_reconnect;
 PicoUtils::WiFiControlSmartConfig wifi_control(wifi_led);
-
-namespace Metrics {
-PicoPrometheus::Gauge free_heap(prometheus, "esp_free_heap", "Free heap memory in bytes", [] { return ESP.getFreeHeap(); });
-}
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
     public:
@@ -189,15 +184,11 @@ void setup() {
         server.sendJson(json);
     });
 
-    prometheus.labels["module"] = "kelvin";
-    prometheus.labels["board"] = get_board_id();
-
     mqtt.connected_callback = [] {
         syslog.println("MQTT connected, publishing readings...");
         last_mqtt_reconnect.reset();
     };
 
-    prometheus.register_metrics_endpoint(server);
     server.begin();
     picomq.begin();
     mqtt.begin();

@@ -3,7 +3,6 @@
 #include <memory>
 
 #include <ArduinoJson.h>
-#include <PicoPrometheus.h>
 #include <PicoUtils.h>
 
 class BLEAddress;
@@ -36,7 +35,6 @@ class BluetoothDevice {
         BluetoothDevice & operator=(const BluetoothDevice &) = delete;
 
         void update(BLEAdvertisedDevice & device);
-        PicoPrometheus::Labels get_labels() const;
         JsonDocument get_json() const;
 
         const Readings * get_readings() const { return readings.get(); }
