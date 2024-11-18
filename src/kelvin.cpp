@@ -17,8 +17,8 @@
 #include <WiFiManager.h>
 
 #include "globals.h"
-#include "reading.h"
 #include "hass.h"
+#include "readings.h"
 
 PicoUtils::PinInput button(0, true);
 PicoUtils::PinOutput wifi_led(2, false);
@@ -31,7 +31,8 @@ PicoMQ picomq;
 PicoMQTT::Client mqtt;
 PicoSyslog::Logger syslog("kelvin");
 
-std::map<BLEAddress, BluetoothDevice> devices;
+std::map<BLEAddress, Readings> readings;
+std::map<BLEAddress, String> names;
 
 bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
@@ -51,13 +52,60 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
                 return;
             }
 
-            auto emplace_result = devices.emplace(address, address);
-            auto & device = emplace_result.first->second;
-            const bool is_new_element = emplace_result.second;
+            bool have_name = (names.count(address) != 0);
+            if (!have_name) {
+                if (advertisedDevice.haveName() && (advertisedDevice.getName().length() > 0)) {
+                    names[address] = advertisedDevice.getName().c_str();
+                    have_name = true;
+                }
+            }
 
-            device.update(advertisedDevice);
+            for (int i = 0; i < advertisedDevice.getServiceDataUUIDCount(); ++i) {
+                static const BLEUUID THERMOMETHER_UUID{(uint16_t) 0x181a};
 
-            active_scan_required = active_scan_required || (is_new_element && !device.name.length());
+                if (!advertisedDevice.getServiceDataUUID(i).equals(THERMOMETHER_UUID)) {
+                    continue;
+                }
+
+                const auto raw_data = advertisedDevice.getServiceData();
+
+                struct {
+                    // uint8_t     size;   // = 18
+                    // uint8_t     uid;    // = 0x16, 16-bit UUID
+                    // uint16_t    UUID;   // = 0x181A, GATT Service 0x181A Environmental Sensing
+                    uint8_t     MAC[6]; // [0] - lo, .. [6] - hi digits
+                    int16_t     temperature;    // x 0.01 degree
+                    uint16_t    humidity;       // x 0.01 %
+                    uint16_t    battery_mv;     // mV
+                    uint8_t     battery_level;  // 0..100 %
+                    uint8_t     counter;        // measurement count
+                    uint8_t     flags;  // GPIO_TRG pin (marking "reset" on circuit board) flags:
+                    // bit0: Reed Switch, input
+                    // bit1: GPIO_TRG pin output value (pull Up/Down)
+                    // bit2: Output GPIO_TRG pin is controlled according to the set parameters
+                    // bit3: Temperature trigger event
+                    // bit4: Humidity trigger event
+                } __attribute__((packed)) data;
+
+                if (sizeof(data) != raw_data.size()) {
+                    continue;
+                }
+
+                memcpy(&data, raw_data.c_str(), sizeof(data));
+
+                const double temperature = 0.01 * (double) data.temperature;
+                const double humidity = 0.01 * (double) data.humidity;
+                const unsigned int battery_level = data.battery_level;
+                const double battery_voltage = 0.001 * (double) data.battery_mv;
+
+                const bool first_reading = (readings.count(address) == 0);
+                if (!have_name && first_reading && !active_scan_required)
+                    active_scan_required = true;
+
+                readings[address] = Readings(temperature, humidity, battery_level, battery_voltage);
+
+                break;
+            }
         }
 } scan_callbacks;
 
@@ -158,13 +206,19 @@ void setup() {
 
         JsonDocument json;
 
-        for (const auto & kv : devices) {
-            auto address = kv.first;
-            const auto & device = kv.second;
-            if (!device.get_readings()) {
-                continue;
-            }
-            json[address.toString()] = device.get_json();
+        for (auto & kv : readings) {
+            const auto & address = kv.first;
+            const auto & reading = kv.second;
+
+            const auto name_it = names.find(address);
+
+            auto e = json[BLEAddress(address).toString().c_str()];
+            e["temperature"] = reading.temperature;
+            e["humidity"] = reading.humidity;
+            e["battery"]["voltage"] = reading.battery_voltage;
+            e["battery"]["level"] = reading.battery_level;
+            e["name"] = name_it != names.end() ? name_it->second.c_str() : nullptr;
+            e["age"] = reading.age.elapsed();
         }
 
         server.sendJson(json);
@@ -172,15 +226,19 @@ void setup() {
 
     server.on("/devices", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
-
         JsonDocument json;
 
-        for (const auto & kv : devices) {
-            auto address = kv.first;
-            const auto & device = kv.second;
-            json[address.toString()] = device.name.length() ? device.name.c_str() : (char *) 0;
-        }
+        for (auto & kv : readings) {
+            const auto & address = kv.first;
+            const String address_str = BLEAddress(address).toString().c_str();
+            const auto name_it = names.find(address);
 
+            if (name_it == names.end()) {
+                json[address_str] = nullptr;
+            } else {
+                json[address_str] = name_it->second;
+            }
+        }
         server.sendJson(json);
     });
 
@@ -218,20 +276,12 @@ void publish_readings() {
 
     const bool just_reconnected = last_publish.elapsed() >= last_mqtt_reconnect.elapsed();
 
-    for (const auto & kv : devices) {
-        const auto & device = kv.second;
+    for (const auto & kv : readings) {
+        auto address = kv.first;
+        const auto & reading = kv.second;
 
-        if (!device.name.length()) {
-            got_all_names = false;
-        }
-
-        const auto * readings = device.get_readings();
-        if (!readings) {
-            continue;
-        }
-
-        const bool already_published = (readings->last_update.elapsed() > last_publish.elapsed());
-        const bool recent = (readings->last_update.elapsed() <= 120);
+        const bool already_published = (reading.age.elapsed() > last_publish.elapsed());
+        const bool recent = (reading.age.elapsed() <= 120);
 
         if (already_published && !(recent && just_reconnected)) {
             // already published and we haven't just reconnected
@@ -239,16 +289,19 @@ void publish_readings() {
         }
 
         static const String topic_prefix = "celsius/" + get_board_id() + "/";
-        const String topic = topic_prefix + device.address;
 
-        if (device.name.length()) {
-            picomq.publish(topic_prefix + device.name + "/temperature", readings->temperature);
-            picomq.publish(topic_prefix + device.name + "/humidity", readings->humidity);
-            mqtt.publish(topic_prefix + device.name + "/temperature", String(readings->temperature));
+        const auto name_it = names.find(address);
+        if (name_it != names.end()) {
+            String & name = name_it->second;
+            picomq.publish(topic_prefix + name + "/temperature", reading.temperature);
+            picomq.publish(topic_prefix + name + "/humidity", reading.humidity);
+            mqtt.publish(topic_prefix + name + "/temperature", String(reading.temperature));
+        } else {
+            got_all_names = false;
         }
 
-        picomq.publish(topic_prefix + device.address + "/temperature", readings->temperature);
-        picomq.publish(topic_prefix + device.address + "/humidity", readings->humidity);
+        picomq.publish(topic_prefix + String(address.toString().c_str()) + "/temperature", reading.temperature);
+        picomq.publish(topic_prefix + String(address.toString().c_str()) + "/humidity", reading.humidity);
     }
 
     last_publish.reset();
