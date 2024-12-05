@@ -19,6 +19,7 @@
 #include "globals.h"
 #include "hass.h"
 #include "readings.h"
+#include "names.h"
 
 PicoUtils::PinInput button(0, true);
 PicoUtils::PinOutput wifi_led(2, false);
@@ -32,15 +33,14 @@ PicoMQTT::Client mqtt;
 PicoSyslog::Logger syslog("kelvin");
 
 std::map<BLEAddress, Readings> readings;
-std::map<BLEAddress, String> names;
-bool names_dirty = false;
-PicoUtils::Stopwatch last_name_save;
-const char NAMES_PATH[] PROGMEM = "/names.json";
 
 bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
 PicoUtils::Stopwatch last_mqtt_reconnect;
 PicoUtils::WiFiControlSmartConfig wifi_control(wifi_led);
+
+Names names;
+PicoUtils::Stopwatch last_name_save;
 
 static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
 
@@ -58,13 +58,12 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
 
             const String address_str = BLEAddress(address).toString().c_str();
 
-            bool have_name = (names.count(address) != 0);
+            bool have_name = names[address];
             if (!have_name && advertisedDevice.haveName()) {
                 const String name = advertisedDevice.getName().c_str();
                 if (name.length() > 0) {
                     syslog.printf("Assigning name %s to %s\n", name.c_str(), address_str.c_str());
-                    names[address] = name;
-                    names_dirty = true;
+                    names.set(address, name);
                     have_name = true;
                 }
             }
@@ -109,8 +108,11 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
 
                 const bool first_reading = (readings.count(address) == 0);
                 if (first_reading) {
-                    syslog.printf("Got first reading from %s, name: %s\n", address_str.c_str(),
-                                  have_name ? names[address].c_str() : "<unknown>");
+                    syslog.printf("Got first reading from %s (%s)\n", address_str.c_str(),
+                                  have_name ? names[address] : "<unknown>");
+                } else {
+                    Serial.printf("Got reading from %s (%s)\n", address_str.c_str(),
+                                  have_name ? names[address] : "<unknown>");
                 }
 
                 if (!have_name && first_reading) {
@@ -205,22 +207,7 @@ void setup() {
     Serial.println("Configuration:");
     serializeJson(network_config::get(), Serial);
 
-    {
-        PicoUtils::JsonConfigFile<JsonDocument> json(SPIFFS, FPSTR(NAMES_PATH));
-        for (auto kv : json.as<JsonObject>()) {
-            BLEAddress address(kv.key().c_str());
-            const String name = kv.value().as<const char *>();
-
-            if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
-                continue;
-            }
-
-            if (name.length() == 0) {
-                continue;
-            }
-            names[address] = name;
-        }
-    }
+    names.load();
 
     Serial.println(F("\n\n"
                      "88  dP 888888 88     Yb    dP 88 88b 88\n"
@@ -252,14 +239,12 @@ void setup() {
             const String address_str = BLEAddress(address).toString().c_str();
             const auto & reading = kv.second;
 
-            const auto name_it = names.find(address);
-
             auto e = json[address_str];
             e["temperature"] = reading.temperature;
             e["humidity"] = reading.humidity;
             e["battery"]["voltage"] = reading.battery_voltage;
             e["battery"]["level"] = reading.battery_level;
-            e["name"] = name_it != names.end() ? name_it->second.c_str() : nullptr;
+            e["name"] = names[address];
             e["age"] = reading.age.elapsed();
         }
 
@@ -268,20 +253,7 @@ void setup() {
 
     server.on("/devices", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
-        JsonDocument json;
-
-        for (auto & kv : readings) {
-            const auto & address = kv.first;
-            const String address_str = BLEAddress(address).toString().c_str();
-            const auto name_it = names.find(address);
-
-            if (name_it == names.end()) {
-                json[address_str] = nullptr;
-            } else {
-                json[address_str] = name_it->second;
-            }
-        }
-        server.sendJson(json);
+        server.sendJson(names.json());
     });
 
     mqtt.connected_callback = [] {
@@ -325,8 +297,8 @@ void publish_readings() {
         const bool already_published = (reading.age.elapsed() > last_publish.elapsed());
         const bool recent = (reading.age.elapsed() <= 120);
 
-        const auto name_it = names.find(address);
-        got_all_names = got_all_names && (name_it != names.end());
+        const char * name = names[address];
+        got_all_names = got_all_names && name;
 
         if (already_published && !(recent && just_reconnected)) {
             // already published and we haven't just reconnected
@@ -335,8 +307,7 @@ void publish_readings() {
 
         static const String topic_prefix = "celsius/" + get_board_id() + "/";
 
-        if (name_it != names.end()) {
-            String & name = name_it->second;
+        if (name) {
             picomq.publish(topic_prefix + name + "/temperature", reading.temperature);
             picomq.publish(topic_prefix + name + "/humidity", reading.humidity);
             mqtt.publish(topic_prefix + name + "/temperature", String(reading.temperature));
@@ -363,28 +334,8 @@ void publish_readings() {
 
     ScanCallbacks::active_scan_required = false;
 
-    if (!active_scan_enabled && names_dirty && last_name_save.elapsed() >= 30 * 60) {
-        syslog.println("Saving names to file.");
-        auto file = SPIFFS.open(FPSTR(NAMES_PATH), "w");
-        if (file) {
-            JsonDocument json;
-
-            for (auto & kv : readings) {
-                const auto & address = kv.first;
-                const String address_str = BLEAddress(address).toString().c_str();
-                const auto name_it = names.find(address);
-
-                if (name_it != names.end()) {
-                    json[address_str] = name_it->second;
-                }
-            }
-
-            serializeJson(json, file);
-            file.close();
-        }
-
-        last_name_save.reset();
-        names_dirty = false;
+    if (!active_scan_enabled && names.is_dirty() && last_name_save.elapsed() >= 30 * 60) {
+        names.save();
     }
 }
 
