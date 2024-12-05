@@ -33,11 +33,16 @@ PicoSyslog::Logger syslog("kelvin");
 
 std::map<BLEAddress, Readings> readings;
 std::map<BLEAddress, String> names;
+bool names_dirty = false;
+PicoUtils::Stopwatch last_name_save;
+const char NAMES_PATH[] PROGMEM = "/names.json";
 
 bool active_scan_enabled;
 PicoUtils::Stopwatch active_scan_stopwatch;
 PicoUtils::Stopwatch last_mqtt_reconnect;
 PicoUtils::WiFiControlSmartConfig wifi_control(wifi_led);
+
+static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
     public:
@@ -45,17 +50,21 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
 
         void onResult(BLEAdvertisedDevice advertisedDevice) override {
             std::lock_guard<std::mutex> guard(mutex);
-            static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
 
             auto address = advertisedDevice.getAddress();
             if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
                 return;
             }
 
+            const String address_str = BLEAddress(address).toString().c_str();
+
             bool have_name = (names.count(address) != 0);
-            if (!have_name) {
-                if (advertisedDevice.haveName() && (advertisedDevice.getName().length() > 0)) {
-                    names[address] = advertisedDevice.getName().c_str();
+            if (!have_name && advertisedDevice.haveName()) {
+                const String name = advertisedDevice.getName().c_str();
+                if (name.length() > 0) {
+                    syslog.printf("Assigning name %s to %s\n", name.c_str(), address_str.c_str());
+                    names[address] = name;
+                    names_dirty = true;
                     have_name = true;
                 }
             }
@@ -87,7 +96,7 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
                     // bit4: Humidity trigger event
                 } __attribute__((packed)) data;
 
-                if (sizeof(data) != raw_data.size()) {
+                if (sizeof(data) != raw_data.length()) {
                     continue;
                 }
 
@@ -99,8 +108,15 @@ class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
                 const double battery_voltage = 0.001 * (double) data.battery_mv;
 
                 const bool first_reading = (readings.count(address) == 0);
-                if (!have_name && first_reading && !active_scan_required)
+                if (first_reading) {
+                    syslog.printf("Got first reading from %s, name: %s\n", address_str.c_str(),
+                                  have_name ? names[address].c_str() : "<unknown>");
+                }
+
+                if (!have_name && first_reading) {
                     active_scan_required = true;
+                    syslog.println("Requesting active scan.");
+                }
 
                 readings[address] = Readings(temperature, humidity, battery_level, battery_voltage);
 
@@ -133,22 +149,27 @@ void load() {
     HomeAssistant::autodiscovery_topic = config["hass"]["autodiscovery_topic"] | "homeassistant";
 }
 
+JsonDocument get() {
+    JsonDocument config;
+    config["hostname"] = hostname;
+    config["mqtt"]["host"] = mqtt.host;
+    config["mqtt"]["port"] = mqtt.port;
+    config["mqtt"]["username"] = mqtt.username;
+    config["mqtt"]["password"] = mqtt.password;
+    config["syslog"] = syslog.server;
+    config["ota_password"] = ota_password;
+    config["hass"]["server"] = HomeAssistant::mqtt.host;
+    config["hass"]["port"] = HomeAssistant::mqtt.port;
+    config["hass"]["username"] = HomeAssistant::mqtt.username;
+    config["hass"]["password"] = HomeAssistant::mqtt.password;
+    return config;
+}
+
 void save() {
     auto file = SPIFFS.open(FPSTR(CONFIG_PATH), "w");
+    auto config = get();
+    serializeJson(config, file);
     if (file) {
-        JsonDocument config;
-        config["hostname"] = hostname;
-        config["mqtt"]["host"] = mqtt.host;
-        config["mqtt"]["port"] = mqtt.port;
-        config["mqtt"]["username"] = mqtt.username;
-        config["mqtt"]["password"] = mqtt.password;
-        config["syslog"] = syslog.server;
-        config["ota_password"] = ota_password;
-        config["hass"]["server"] = HomeAssistant::mqtt.host;
-        config["hass"]["port"] = HomeAssistant::mqtt.port;
-        config["hass"]["username"] = HomeAssistant::mqtt.username;
-        config["hass"]["password"] = HomeAssistant::mqtt.password;
-        serializeJson(config, file);
         file.close();
     }
 }
@@ -181,6 +202,26 @@ void setup() {
     SPIFFS.begin();
     network_config::load();
 
+    Serial.println("Configuration:");
+    serializeJson(network_config::get(), Serial);
+
+    {
+        PicoUtils::JsonConfigFile<JsonDocument> json(SPIFFS, FPSTR(NAMES_PATH));
+        for (auto kv : json.as<JsonObject>()) {
+            BLEAddress address(kv.key().c_str());
+            const String name = kv.value().as<const char *>();
+
+            if (memcmp(address.getNative(), ADDRESS_PREFIX, 3) != 0) {
+                continue;
+            }
+
+            if (name.length() == 0) {
+                continue;
+            }
+            names[address] = name;
+        }
+    }
+
     Serial.println(F("\n\n"
                      "88  dP 888888 88     Yb    dP 88 88b 88\n"
                      "88odP  88__   88      Yb  dP  88 88Yb88\n"
@@ -208,11 +249,12 @@ void setup() {
 
         for (auto & kv : readings) {
             const auto & address = kv.first;
+            const String address_str = BLEAddress(address).toString().c_str();
             const auto & reading = kv.second;
 
             const auto name_it = names.find(address);
 
-            auto e = json[BLEAddress(address).toString().c_str()];
+            auto e = json[address_str];
             e["temperature"] = reading.temperature;
             e["humidity"] = reading.humidity;
             e["battery"]["voltage"] = reading.battery_voltage;
@@ -261,10 +303,10 @@ void setup() {
         ArduinoOTA.begin();
     }
 
-    wifi_control.get_connectivity_level = []{
+    wifi_control.get_connectivity_level = [] {
         unsigned int ret = 1;
-        if (mqtt.connected()) ++ret;
-        if (HomeAssistant::connected()) ++ret;
+        if (mqtt.connected()) { ++ret; }
+        if (HomeAssistant::connected()) { ++ret; }
         return ret;
     };
 }
@@ -283,6 +325,9 @@ void publish_readings() {
         const bool already_published = (reading.age.elapsed() > last_publish.elapsed());
         const bool recent = (reading.age.elapsed() <= 120);
 
+        const auto name_it = names.find(address);
+        got_all_names = got_all_names && (name_it != names.end());
+
         if (already_published && !(recent && just_reconnected)) {
             // already published and we haven't just reconnected
             continue;
@@ -290,14 +335,11 @@ void publish_readings() {
 
         static const String topic_prefix = "celsius/" + get_board_id() + "/";
 
-        const auto name_it = names.find(address);
         if (name_it != names.end()) {
             String & name = name_it->second;
             picomq.publish(topic_prefix + name + "/temperature", reading.temperature);
             picomq.publish(topic_prefix + name + "/humidity", reading.humidity);
             mqtt.publish(topic_prefix + name + "/temperature", String(reading.temperature));
-        } else {
-            got_all_names = false;
         }
 
         picomq.publish(topic_prefix + String(address.toString().c_str()) + "/temperature", reading.temperature);
@@ -320,6 +362,30 @@ void publish_readings() {
     }
 
     ScanCallbacks::active_scan_required = false;
+
+    if (!active_scan_enabled && names_dirty && last_name_save.elapsed() >= 30 * 60) {
+        syslog.println("Saving names to file.");
+        auto file = SPIFFS.open(FPSTR(NAMES_PATH), "w");
+        if (file) {
+            JsonDocument json;
+
+            for (auto & kv : readings) {
+                const auto & address = kv.first;
+                const String address_str = BLEAddress(address).toString().c_str();
+                const auto name_it = names.find(address);
+
+                if (name_it != names.end()) {
+                    json[address_str] = name_it->second;
+                }
+            }
+
+            serializeJson(json, file);
+            file.close();
+        }
+
+        last_name_save.reset();
+        names_dirty = false;
+    }
 }
 
 void no_wifi_reset() {

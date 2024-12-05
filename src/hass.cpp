@@ -18,8 +18,9 @@ extern std::map<BLEAddress, String> names;
 namespace {
 
 void autodiscovery(BLEAddress address, String name) {
-    if (!HomeAssistant::autodiscovery_topic.length())
+    if (!HomeAssistant::autodiscovery_topic.length()) {
         return;
+    }
 
     syslog.printf("Sending Home Assistant autodiscovery for device %s (%s).\n",
                   address.toString().c_str(), name.c_str());
@@ -78,8 +79,9 @@ void autodiscovery(BLEAddress address, String name) {
 
 void autodiscovery(BLEAddress address) {
     const auto it = names.find(address);
-    if (it != names.end())
+    if (it != names.end()) {
         autodiscovery(address, it->second);
+    }
 }
 
 void autodiscovery() {
