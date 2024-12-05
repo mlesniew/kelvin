@@ -196,10 +196,21 @@ void restart_scan() {
 }
 
 void setup() {
+    Serial.begin(115200);
+    Serial.print(
+        R"(
+
+88  dP 888888 88     Yb    dP 88 88b 88
+88odP  88__   88      Yb  dP  88 88Yb88
+88"Yb  88""   88  .o   YbdP   88 88 Y88
+88  Yb 888888 88ood8    YP    88 88  Y8
+
+)"
+    "Kelvin " __DATE__ " " __TIME__ "\n"
+);
+
     wifi_led.init();
     button.init();
-
-    Serial.begin(115200);
 
     SPIFFS.begin();
     network_config::load();
@@ -208,17 +219,6 @@ void setup() {
     serializeJson(network_config::get(), Serial);
 
     names.load();
-
-    Serial.println(F("\n\n"
-                     "88  dP 888888 88     Yb    dP 88 88b 88\n"
-                     "88odP  88__   88      Yb  dP  88 88Yb88\n"
-                     "88\"Yb  88\"\"   88  .o   YbdP   88 88 Y88\n"
-                     "88  Yb 888888 88ood8    YP    88 88  Y8\n"
-                     "\n"
-                     "Kelvin " __DATE__ " " __TIME__ "\n"
-                     "\n\n"
-                     "Press and hold button now to enter WiFi setup.\n"
-                    ));
 
     WiFi.hostname(hostname);
     wifi_control.init(button);
