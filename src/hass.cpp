@@ -41,10 +41,11 @@ void autodiscovery(BLEAddress address, String name) {
         {"battery_voltage", "Battery voltage", "V", 2, true, "voltage"},
     };
 
-    for (const auto & entity : entities) {
-        String dev_addr_without_colons = address.toString().c_str();
-        dev_addr_without_colons.replace(":", "");
+    const String mac = address.toString().c_str();
+    String dev_addr_without_colons = mac;
+    dev_addr_without_colons.replace(":", "");
 
+    for (const auto & entity : entities) {
         auto unique_id = "kelvin_" + dev_addr_without_colons + "_" + entity.name;
 
         const String topic = HomeAssistant::autodiscovery_topic + "/sensor/" + unique_id + "/config";
@@ -68,7 +69,7 @@ void autodiscovery(BLEAddress address, String name) {
         dev["model"] = "LYWSD03MMC";
         dev["identifiers"][0] = dev_addr_without_colons;
         dev["connections"][0][0] = "mac";
-        dev["connections"][0][1] = address.toString().c_str();
+        dev["connections"][0][1] = mac;
         dev["via_device"] = "kelvin_" + get_board_id();
 
         auto publish = HomeAssistant::mqtt.begin_publish(topic, measureJson(json), 0, true);
