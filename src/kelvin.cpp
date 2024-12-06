@@ -333,10 +333,6 @@ void publish_readings() {
     }
 
     ScanCallbacks::active_scan_required = false;
-
-    if (!active_scan_enabled && names.is_dirty() && last_name_save.elapsed() >= 30 * 60) {
-        names.save();
-    }
 }
 
 void no_wifi_reset() {
@@ -362,6 +358,11 @@ void loop() {
         std::lock_guard<std::mutex> guard(mutex);
         publish_readings();
         HomeAssistant::tick();
+
+        if (!active_scan_enabled && names.is_dirty() && last_name_save.elapsed() >= 30 * 60) {
+            names.save();
+            last_name_save.reset();
+        }
     }
 
     no_wifi_reset();
