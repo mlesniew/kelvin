@@ -239,7 +239,7 @@ void setup() {
             const String address_str = BLEAddress(address).toString().c_str();
             const auto & reading = kv.second;
 
-            auto e = json[address_str];
+            auto e = json[address_str].to<JsonObject>();
             e["temperature"] = reading.temperature;
             e["humidity"] = reading.humidity;
             e["battery"]["voltage"] = reading.battery_voltage;

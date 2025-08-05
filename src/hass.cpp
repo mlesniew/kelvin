@@ -63,7 +63,7 @@ void autodiscovery(BLEAddress address, String name) {
             json["entity_category"] = "diagnostic";
         }
 
-        auto dev = json["device"];
+        auto dev = json["device"].to<JsonObject>();
         dev["name"] = name;
         dev["manufacturer"] = "Xiaomi";
         dev["model"] = "LYWSD03MMC";
