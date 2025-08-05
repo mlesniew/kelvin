@@ -324,6 +324,7 @@ void publish_readings() {
 
         picomq.publish(topic_prefix + String(address.toString().c_str()) + "/temperature", reading.temperature);
         picomq.publish(topic_prefix + String(address.toString().c_str()) + "/humidity", reading.humidity);
+        mqtt.publish(topic_prefix + String(address.toString().c_str()) + "/temperature", String(reading.temperature));
     }
 
     last_publish.reset();
