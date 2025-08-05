@@ -45,6 +45,10 @@ void Names::save() {
     dirty = false;
 }
 
+void Names::clear() {
+    names.clear();
+}
+
 const char * Names::operator[](const BLEAddress & address) const {
     const auto it = names.find(address);
     return it != names.end() ? it->second.c_str() : nullptr;

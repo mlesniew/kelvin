@@ -42,7 +42,7 @@ PicoUtils::WiFiControlSmartConfig wifi_control(wifi_led);
 Names names;
 PicoUtils::Stopwatch last_name_save;
 
-static const char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
+static const unsigned char ADDRESS_PREFIX[] = {0xa4, 0xc1, 0x38};
 
 class ScanCallbacks: public BLEAdvertisedDeviceCallbacks {
     public:
@@ -254,6 +254,15 @@ void setup() {
     server.on("/devices", HTTP_GET, [] {
         std::lock_guard<std::mutex> guard(mutex);
         server.sendJson(names.json());
+    });
+
+    server.on("/devices", HTTP_DELETE, [] {
+        std::lock_guard<std::mutex> guard(mutex);
+        names.clear();
+        syslog.println(F("Enabling active scan after dropping names."));
+        active_scan_enabled = true;
+        restart_scan();
+        server.send(200, "text/plain", "OK");
     });
 
     mqtt.connected_callback = [] {

@@ -14,6 +14,7 @@ class Names {
 
         void load();
         void save();
+        void clear();
 
         const char * operator[](const BLEAddress & address) const;
         void set(const BLEAddress & address, const String & name);
