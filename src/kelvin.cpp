@@ -265,6 +265,8 @@ void setup() {
         server.send(200, "text/plain", "OK");
     });
 
+    server.serveStatic("/", SPIFFS, "/html/", "max-age=86400");
+
     mqtt.connected_callback = [] {
         syslog.println("MQTT connected, publishing readings...");
         last_mqtt_reconnect.reset();

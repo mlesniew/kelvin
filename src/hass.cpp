@@ -145,6 +145,7 @@ void autodiscovery() {
         dev["connections"][1][0] = "ip";
         dev["connections"][1][1] = WiFi.localIP();
         dev["sw_version"] = __DATE__ " " __TIME__;
+        dev["configuration_url"] = String("http://") + WiFi.localIP().toString();
 
         auto publish = HomeAssistant::mqtt.begin_publish(topic, measureJson(json), 0, true);
         serializeJson(json, publish);
